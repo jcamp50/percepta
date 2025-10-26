@@ -1,0 +1,29 @@
+{
+  "name": "percepta-node-service",
+  "version": "1.0.0",
+  "description": "Percepta Node.js service for Twitch IRC and audio capture",
+  "main": "index.js",
+  "scripts": {
+    "start": "node node/index.js",
+    "dev": "nodemon node/index.js"
+  },
+  "keywords": [
+    "twitch",
+    "chat",
+    "bot",
+    "irc",
+    "audio"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "tmi.js": "^1.8.5",
+    "fluent-ffmpeg": "^2.1.2",
+    "axios": "^1.6.5",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}
+
