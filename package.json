@@ -5,7 +5,9 @@
   "main": "index.js",
   "scripts": {
     "start": "node node/index.js",
-    "dev": "nodemon node/index.js"
+    "dev": "nodemon node/index.js",
+    "setup:oauth": "node scripts/init_twitch_oauth.js",
+    "test:auth": "node scripts/test_twitch_auth.js"
   },
   "keywords": [
     "twitch",
@@ -20,7 +22,9 @@
     "tmi.js": "^1.8.5",
     "fluent-ffmpeg": "^2.1.2",
     "axios": "^1.6.5",
-    "dotenv": "^16.3.1"
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "open": "^10.0.3"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"

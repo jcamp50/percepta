@@ -76,14 +76,14 @@ Before proceeding with Phase 1.2, you'll need to install:
 
 ### What's Next?
 
-**Phase 1.2: JCB-6 - Twitch Bot Account & OAuth Setup**
+**Phase 1.3: JCB-7 - Node IRC Chat Service**
 
 This involves:
 
-- Creating a Twitch bot account
-- Registering the app in Twitch Developer Console
-- Generating OAuth tokens
-- Setting up ngrok for local development
+- Building the Node.js IRC client with tmi.js
+- Connecting to Twitch chat
+- Reading messages from chat
+- Sending responses back to chat
 
 ## Verification
 
@@ -98,10 +98,14 @@ To verify this phase is complete, confirm:
 
 ## Notes
 
-- Docker is not yet installed on this system. You'll need to install Docker Desktop before running `docker compose up`.
+- ✅ **Docker is installed and verified!** Docker version 28.5.1 with Compose v2.40.2
+- ✅ **Database containers tested and working:**
+  - PostgreSQL 15.4 with pgvector v0.5.1 extension ✓
+  - Redis 7 Alpine ✓
 - All environment variables are documented in `.env.example`.
 - The project structure follows the architecture defined in `PROJECT.md`.
 
 ## Issues Completed
 
 - ✅ **JCB-5**: Phase 1.1: Project Setup & Environment Configuration
+- ✅ **JCB-6**: Phase 1.2: Twitch Bot Account & OAuth Setup
