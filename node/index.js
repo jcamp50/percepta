@@ -13,6 +13,7 @@
  */
 
 require('dotenv').config(); // Load .env file
+const axios = require('axios');
 const ChatClient = require('./chat');
 const logger = require('./utils/logger');
 
@@ -51,6 +52,13 @@ function validateEnvironment() {
     logger.info('Please check your .env file and try again.');
     process.exit(1);
   }
+
+  // Set default for Python service URL if not provided
+  if (!process.env.PYTHON_SERVICE_URL) {
+    process.env.PYTHON_SERVICE_URL = 'http://localhost:8000';
+    logger.info('Using default PYTHON_SERVICE_URL: http://localhost:8000');
+  }
+
   logger.success('Environment variables validated successfully');
 }
 
@@ -80,6 +88,7 @@ async function main() {
       botName: process.env.TWITCH_BOT_NAME,
       oauthToken: process.env.TWITCH_BOT_TOKEN,
       channel: process.env.TARGET_CHANNEL,
+      pythonServiceUrl: process.env.PYTHON_SERVICE_URL,
     });
     chatClient.initialize();
     await chatClient.connect();

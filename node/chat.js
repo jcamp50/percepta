@@ -15,6 +15,7 @@
  */
 
 const tmi = require('tmi.js');
+const axios = require('axios');
 const logger = require('./utils/logger');
 
 /**
@@ -30,10 +31,12 @@ class ChatClient {
      * - botName: string
      * - oauthToken: string
      * - channel: string
+     * - pythonServiceUrl: string
      */
     this.config = config;
     this.client = null;
     this.isConnected = false;
+    this.pollInterval = null;
   }
 
   /**
@@ -134,7 +137,40 @@ class ChatClient {
     if (self) return;
 
     const username = userstate['display-name'] || userstate.username;
-    logger.chat(channel.replace('#', ''), username, message);
+
+    if (
+      username &&
+      username.toLowerCase() === this.config.botName.toLowerCase()
+    )
+      return;
+      
+    const channelName = channel.replace('#', '');
+    logger.chat(channelName, username, message);
+
+    // Forward message to Python service (fire and forget)
+    this._forwardMessageToPython(channelName, username, message);
+  }
+
+  /**
+   * Forward message to Python service
+   * @param {string} channel - Channel name (without #)
+   * @param {string} username - Username who sent the message
+   * @param {string} message - Message content
+   * @private
+   */
+  _forwardMessageToPython(channel, username, message) {
+    // Don't await - fire and forget to avoid blocking chat
+    axios
+      .post(`${this.config.pythonServiceUrl}/chat/message`, {
+        channel: channel,
+        username: username,
+        message: message,
+        timestamp: new Date().toISOString(),
+      })
+      .catch((error) => {
+        // Log error but don't crash (Python might be down)
+        logger.warn(`Failed to forward message to Python: ${error.message}`);
+      });
   }
 
   /**
@@ -174,6 +210,9 @@ class ChatClient {
     try {
       await this.client.connect();
       logger.success('Connected to Twitch IRC');
+
+      // Start polling for responses from Python
+      this.startPolling();
     } catch (error) {
       logger.error(`Failed to connect to Twitch IRC: ${error.message}`);
       throw error;
@@ -187,6 +226,13 @@ class ChatClient {
   async disconnect() {
     // TODO: Implement disconnection
     // Should also set this.isConnected = false
+
+    // Stop polling
+    if (this.pollInterval) {
+      clearInterval(this.pollInterval);
+      this.pollInterval = null;
+    }
+
     try {
       await this.client.disconnect();
       this.isConnected = false;
@@ -224,6 +270,41 @@ class ChatClient {
       logger.error(`Failed to send message to ${channel}: ${error.message}`);
       throw error;
     }
+  }
+
+  /**
+   * Start polling Python service for queued responses
+   * Polls every 500ms
+   */
+  startPolling() {
+    logger.info('Starting polling for Python responses (500ms interval)');
+
+    this.pollInterval = setInterval(async () => {
+      try {
+        // Poll Python /chat/send endpoint
+        const response = await axios.post(
+          `${this.config.pythonServiceUrl}/chat/send`,
+          { channel: this.config.channel }
+        );
+
+        // Send each queued message
+        const messages = response.data.messages || [];
+        for (const msg of messages) {
+          // If reply_to is set, prefix message with @username
+          const messageText = msg.reply_to
+            ? `@${msg.reply_to} ${msg.message}`
+            : msg.message;
+
+          await this.sendMessage(msg.channel, messageText);
+        }
+      } catch (error) {
+        // Log error but don't crash polling
+        if (error.code !== 'ECONNREFUSED') {
+          // Only log non-connection errors to reduce spam
+          logger.warn(`Polling error: ${error.message}`);
+        }
+      }
+    }, 500);
   }
 }
 

@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     port: int = 8000
     host: str = "0.0.0.0"
     openai_api_key: Optional[str] = None
+    twitch_bot_name: Optional[str] = None
 
     class Config:
         """

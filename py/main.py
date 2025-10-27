@@ -89,6 +89,14 @@ app.add_middleware(
 )
 
 # ============================================================================
+# MESSAGE QUEUE
+# ============================================================================
+
+# In-memory message queue for bot responses
+# Each item: {"channel": str, "message": str, "reply_to": Optional[str]}
+message_queue = []
+
+# ============================================================================
 # ENDPOINTS
 # ============================================================================
 
@@ -152,7 +160,27 @@ async def receive_message(message: ChatMessage):
     - Catches bugs (can't return wrong shape)
     """
     # TODO: Implement message reception
-    logger.info(f"Received message from {message.username} in #{message.channel}: {message.message}")
+    logger.info(
+        f"Received message from {message.username} in #{message.channel}: {message.message}"
+    )
+
+    # Check for @mention at start of message
+    bot_name = settings.twitch_bot_name or "percepta"  # Fallback if not set
+    tokens = message.message.lstrip().split()
+    first_word = tokens[0].lower() if tokens else ""
+
+    # If bot is mentioned and message contains "ping"
+    if first_word == f"@{bot_name.lower()}" and "ping" in message.message.lower():
+        response_text = f"pong"
+        message_queue.append(
+            {
+                "channel": message.channel,
+                "message": response_text,
+                "reply_to": message.username,
+            }
+        )
+        logger.info(f"Queued response: {response_text}")
+
     return MessageReceived(
         received=True,
         message_id=str(uuid.uuid4()),
@@ -188,9 +216,32 @@ async def send_messages(request: SendRequest):
     Future: Could use WebSockets for real-time push
     """
     # TODO: Implement send endpoint
-    logger.info(f"Send request for channel: {request.channel}")
+    logger.debug(f"Send request for channel: {request.channel}")
+
+    # Filter messages for this channel
+    channel_messages = [
+        msg for msg in message_queue if msg["channel"] == request.channel
+    ]
+
+    # Convert to ChatResponse objects
+    responses = [
+        ChatResponse(
+            channel=msg["channel"], message=msg["message"], reply_to=msg.get("reply_to")
+        )
+        for msg in channel_messages
+    ]
+
+    # Remove sent messages from queue
+    for msg in channel_messages:
+        message_queue.remove(msg)
+
+    if responses:
+        logger.info(
+            f"Returning {len(responses)} message(s) for channel {request.channel}"
+        )
+
     return SendResponse(
-        messages=[],
+        messages=responses,
     )
 
 
