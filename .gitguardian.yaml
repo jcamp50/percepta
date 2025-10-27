@@ -1,0 +1,9 @@
+# .gitguardian.yaml
+version: 2
+paths-ignore:
+  - docker-compose.yml # Local dev only, not production
+
+# OR be more specific:
+matches-ignore:
+  - name: docker-compose postgres password
+    match: POSTGRES_PASSWORD.*postgres

@@ -1,0 +1,39 @@
+# Web Framework
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# Agent Orchestration
+langgraph==0.0.32
+langchain==0.1.6
+langchain-openai==0.0.5
+
+# Database & ORM
+sqlalchemy==2.0.25
+psycopg2-binary==2.9.9
+pgvector==0.2.4
+alembic==1.13.1
+
+# Speech-to-Text
+faster-whisper==1.0.0
+
+# Twitch Integration
+twitchAPI==4.1.0
+
+# OpenAI
+openai==1.10.0
+
+# Redis
+redis==5.0.1
+
+# Data Validation
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# Environment & Config
+python-dotenv==1.0.0
+
+# Utilities
+httpx==0.26.0
+asyncio==3.4.3
+
