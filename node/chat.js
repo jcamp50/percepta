@@ -37,6 +37,7 @@ class ChatClient {
     this.client = null;
     this.isConnected = false;
     this.pollInterval = null;
+    this.isPolling = false; // Lock flag to prevent overlapping poll executions
   }
 
   /**
@@ -143,7 +144,7 @@ class ChatClient {
       username.toLowerCase() === this.config.botName.toLowerCase()
     )
       return;
-      
+
     const channelName = channel.replace('#', '');
     logger.chat(channelName, username, message);
 
@@ -274,12 +275,23 @@ class ChatClient {
 
   /**
    * Start polling Python service for queued responses
-   * Polls every 500ms
+   * Polls every 500ms with protection against overlapping executions
    */
   startPolling() {
     logger.info('Starting polling for Python responses (500ms interval)');
 
     this.pollInterval = setInterval(async () => {
+      // Skip this iteration if previous poll is still running
+      if (this.isPolling) {
+        logger.debug(
+          'Skipping poll iteration - previous poll still in progress'
+        );
+        return;
+      }
+
+      // Set lock to prevent concurrent executions
+      this.isPolling = true;
+
       try {
         // Poll Python /chat/send endpoint
         const response = await axios.post(
@@ -303,6 +315,9 @@ class ChatClient {
           // Only log non-connection errors to reduce spam
           logger.warn(`Polling error: ${error.message}`);
         }
+      } finally {
+        // Always release the lock, even if an error occurred
+        this.isPolling = false;
       }
     }, 500);
   }
