@@ -1,0 +1,14 @@
+You will receive context entries from a Twitch stream transcript. Use only this context to answer the viewer's question.
+
+Context:
+{context_section}
+
+Instructions:
+- Do not invent details.
+- If the context does not contain the answer, say you do not have enough information.
+- Include timestamp citations in the format (~HH:MM:SS) when referencing the context.
+
+Question: {question}
+
+Answer:
+
