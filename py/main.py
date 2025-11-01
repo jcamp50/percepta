@@ -17,6 +17,7 @@ Why FastAPI?
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
+from typing import Optional
 import logging
 import uuid
 
@@ -27,7 +28,10 @@ from schemas.messages import (
     SendRequest,
     SendResponse,
     ChatResponse,
+    RAGQueryRequest,
+    RAGAnswerResponse,
 )
+from py.reason.rag import RAGService
 
 # Configure logging
 # TASK: Set up Python logging
@@ -95,6 +99,12 @@ app.add_middleware(
 # In-memory message queue for bot responses
 # Each item: {"channel": str, "message": str, "reply_to": Optional[str]}
 message_queue = []
+
+try:
+    rag_service: Optional[RAGService] = RAGService()
+except ValueError as exc:
+    logger.warning("RAG service unavailable: %s", exc)
+    rag_service = None
 
 # ============================================================================
 # ENDPOINTS
@@ -243,6 +253,28 @@ async def send_messages(request: SendRequest):
     return SendResponse(
         messages=responses,
     )
+
+
+@app.post("/rag/answer", response_model=RAGAnswerResponse)
+async def rag_answer(request: RAGQueryRequest):
+    if rag_service is None:
+        raise HTTPException(status_code=503, detail="RAG service unavailable")
+
+    try:
+        result = await rag_service.answer(
+            channel_id=request.channel,
+            question=request.question,
+            top_k=request.top_k,
+            half_life_minutes=request.half_life_minutes,
+            prefilter_limit=request.prefilter_limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        logger.exception("Failed to generate RAG answer")
+        raise HTTPException(status_code=500, detail="Failed to generate answer")
+
+    return RAGAnswerResponse(**result)
 
 
 # ============================================================================

@@ -1,34 +1,36 @@
 # Web Framework
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
-python-multipart==0.0.6
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
 
-# Agent Orchestration
-langgraph==0.0.32
-langchain==0.1.6
-langchain-openai==0.0.5
+# Agent Orchestration (Phase 4-5)
+langgraph==0.2.45
+langchain==0.3.13
+langchain-openai==0.2.14
+langchain-community==0.3.13
 
 # Database & ORM
 sqlalchemy==2.0.25
 psycopg2-binary==2.9.9
 pgvector==0.2.4
 alembic==1.13.1
+asyncpg==0.29.0
 
-# Speech-to-Text
-faster-whisper==1.0.0
+# Speech-to-Text (Phase 3)
+# faster-whisper==1.0.0  # Requires FFmpeg - install in Phase 3
 
 # Twitch Integration
 twitchAPI==4.1.0
 
 # OpenAI
-openai==1.10.0
+openai==1.59.8
 
 # Redis
 redis==5.0.1
 
 # Data Validation
-pydantic==2.5.3
-pydantic-settings==2.1.0
+pydantic==2.10.6
+pydantic-settings==2.7.1
 
 # Environment & Config
 python-dotenv==1.0.0

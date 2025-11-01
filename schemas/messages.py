@@ -16,7 +16,7 @@ Why Pydantic models?
 
 from pydantic import BaseModel, Field
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 
 class ChatMessage(BaseModel):
@@ -152,6 +152,43 @@ class SendResponse(BaseModel):
 
     # TODO: Define field
     messages: list[ChatResponse] = Field(..., description="List of messages to send")
+
+
+class RAGQueryRequest(BaseModel):
+    channel: str = Field(..., description="Twitch channel identifier", example="mychannel")
+    question: str = Field(..., description="Viewer question to answer")
+    top_k: Optional[int] = Field(None, description="Override number of chunks to retrieve")
+    half_life_minutes: Optional[int] = Field(
+        None, description="Override for time-decay half-life in minutes"
+    )
+    prefilter_limit: Optional[int] = Field(
+        None,
+        description="Override for IVFFLAT prefilter limit before rescoring",
+    )
+
+
+class RAGCitation(BaseModel):
+    id: str = Field(..., description="Identifier of the cited transcript chunk")
+    timestamp: str = Field(..., description="Timestamp marker like (~01:23:10)")
+
+
+class RAGChunkResult(BaseModel):
+    id: str
+    channel_id: str
+    started_at: datetime
+    ended_at: datetime
+    midpoint: datetime
+    timestamp: str
+    text: str
+    score: float
+    cosine_distance: float
+
+
+class RAGAnswerResponse(BaseModel):
+    answer: str
+    citations: List[RAGCitation]
+    chunks: List[RAGChunkResult]
+    context: List[str]
 
 
 """

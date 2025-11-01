@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     openai_api_key: Optional[str] = None
     twitch_bot_name: Optional[str] = None
+    rag_top_k: int = 5
+    rag_prefilter_limit: int = 40
+    rag_half_life_minutes: int = 60
+    rag_context_char_limit: int = 2000
+    rag_temperature: float = 0.4
+    rag_completion_model: str = "gpt-4o-mini"
+    rag_system_prompt_file: str = "py/reason/prompts/system_prompt.txt"
+    rag_user_prompt_file: str = "py/reason/prompts/user_prompt.txt"
 
     class Config:
         """
