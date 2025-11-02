@@ -133,7 +133,11 @@ Percepta is an AI-powered Twitch chat bot that provides real-time, contextual an
 
 - **Ingest**: Receives audio, transcribes, processes events, polls metadata
 - **Memory**: Manages vector storage, embeddings, summarization, sessions
-- **Reasoning**: RAG retrieval + LLM answer generation
+- **Reasoning**: RAG retrieval + LLM answer generation (`py/reason/rag.py`)
+  - Embed viewer question (`py/utils/embeddings.embed_text`)
+  - Retrieve recent transcripts via time-biased search (`VectorStore.search_transcripts`)
+  - Build grounded prompt with timestamped citations
+  - Call OpenAI `gpt-4o-mini` and return answer + citations via `POST /rag/answer`
 - **Output**: Formats responses, enforces rate limits, queues messages
 
 #### Databases
@@ -292,6 +296,25 @@ Chat Message → Node IRC → Python /chat/message → @mention check
 3. Search events (raids, subs, polls)
 4. Search metadata (current game, title)
 5. Merge and rank by relevance + recency
+
+### Agentic Groundwork (MVP-ready)
+
+To prepare for a future agentic architecture without adding latency to MVP, we added:
+
+- Tool boundaries: small interfaces around embedding, vector search, context building, and LLM calls (`py/reason/interfaces.py`).
+- Retriever abstraction: a single entry point to route retrievals (`py/reason/retriever.py`), currently transcripts-only but ready to add events/summaries/metadata.
+- Minimal RAG state: per-channel/user shape for session-aware tuning (`schemas/rag_state.py`).
+- Telemetry: step timings and hit stats in `RAGService` for data-driven policies.
+- Budgeting hook: optional compressor for context assembly (no-op by default).
+- Guardrails: optional lightweight critic to ensure timestamp citations.
+
+These changes keep the current single-pass RAG fast while allowing an easy evolution to a node/edge graph later.
+
+### MVP 1.5 (Planned) – Agentic + Video Understanding
+
+- Agentic graph with nodes: QueryRewrite → Multi-Retriever (transcripts/events/summaries/metadata) → Merger/Ranker → Compressor → Generator → Critic/Repair.
+- Video understanding: clip embeddings aligned to transcripts; scene/shot detectors; cross-modal ranking.
+- Policies: adaptive time windows, multi-hop retrieval, cost/time step limits, safety checks.
 
 ---
 
@@ -626,6 +649,7 @@ ngrok http 8000
 
 - Test end-to-end flows with test data
 - Use `scripts/test_chat.py` for manual testing
+- Use `scripts/test_rag.py` to smoke-test RAG retrieval + answer generation
 - Verify latency and accuracy
 
 #### Live Testing
