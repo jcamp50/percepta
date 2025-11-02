@@ -184,11 +184,17 @@ class RAGChunkResult(BaseModel):
     cosine_distance: float
 
 
+class RAGPrompts(BaseModel):
+    system: str = Field(..., description="System prompt used for LLM")
+    user: str = Field(..., description="User prompt with context and question")
+
+
 class RAGAnswerResponse(BaseModel):
     answer: str
     citations: List[RAGCitation]
     chunks: List[RAGChunkResult]
     context: List[str]
+    prompts: RAGPrompts = Field(..., description="Prompts used for LLM generation")
 
 
 """
