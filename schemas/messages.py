@@ -64,7 +64,7 @@ class ChatMessage(BaseModel):
                 "channel": "mychannel",
                 "username": "viewer123",
                 "message": "Hello, world!",
-                "timestamp": "2025-01-01T00:00:00Z"
+                "timestamp": "2025-01-01T00:00:00Z",
             }
         }
 
@@ -155,9 +155,13 @@ class SendResponse(BaseModel):
 
 
 class RAGQueryRequest(BaseModel):
-    channel: str = Field(..., description="Twitch channel identifier", example="mychannel")
+    channel: str = Field(
+        ..., description="Twitch channel identifier", example="mychannel"
+    )
     question: str = Field(..., description="Viewer question to answer")
-    top_k: Optional[int] = Field(None, description="Override number of chunks to retrieve")
+    top_k: Optional[int] = Field(
+        None, description="Override number of chunks to retrieve"
+    )
     half_life_minutes: Optional[int] = Field(
         None, description="Override for time-decay half-life in minutes"
     )
@@ -195,6 +199,63 @@ class RAGAnswerResponse(BaseModel):
     chunks: List[RAGChunkResult]
     context: List[str]
     prompts: RAGPrompts = Field(..., description="Prompts used for LLM generation")
+
+
+class TranscriptionWord(BaseModel):
+    word: str = Field(..., description="Transcribed word")
+    start: float = Field(..., description="Start time in seconds")
+    end: float = Field(..., description="End time in seconds")
+
+
+class TranscriptionSegment(BaseModel):
+    start: float = Field(..., description="Segment start time in seconds")
+    end: float = Field(..., description="Segment end time in seconds")
+    text: str = Field(..., description="Transcribed text for this segment")
+    words: List[TranscriptionWord] = Field(
+        default_factory=list, description="Word-level timestamps"
+    )
+
+
+class AudioStreamUrlResponse(BaseModel):
+    """
+    Response containing authenticated Twitch audio-only stream URL
+    
+    Used by Node.js service to get HLS URLs for FFmpeg audio capture.
+    Streamlink handles all Twitch authentication internally.
+    """
+    
+    channel_id: str = Field(..., description="Twitch channel identifier")
+    stream_url: str = Field(..., description="Authenticated HLS URL for audio-only stream")
+    quality: str = Field(default="audio_only", description="Stream quality (always 'audio_only' for our use case)")
+    available: bool = Field(..., description="Whether stream is currently available/live")
+
+
+class TranscriptionResponse(BaseModel):
+    transcript: str = Field(..., description="Full transcription text")
+    segments: List[TranscriptionSegment] = Field(
+        ..., description="Timestamped segments"
+    )
+    language: str = Field(..., description="Detected language code")
+    duration: float = Field(..., description="Audio duration in seconds")
+    model: str = Field(..., description="Whisper model used")
+    processing_time_ms: int = Field(
+        ..., description="Transcription latency in milliseconds"
+    )
+    channel_id: str = Field(..., description="Twitch channel identifier")
+    started_at: str = Field(..., description="ISO timestamp when chunk started")
+    ended_at: str = Field(..., description="ISO timestamp when chunk ended")
+    stored_in_db: bool = Field(
+        default=False, description="Whether transcript was stored in vector DB"
+    )
+    transcript_id: Optional[str] = Field(
+        default=None, description="UUID of inserted transcript"
+    )
+    embedding_latency_ms: Optional[int] = Field(
+        default=None, description="Embedding generation time in milliseconds"
+    )
+    db_insert_latency_ms: Optional[int] = Field(
+        default=None, description="Database insert time in milliseconds"
+    )
 
 
 """

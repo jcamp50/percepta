@@ -126,7 +126,7 @@ Percepta is an AI-powered Twitch chat bot that provides real-time, contextual an
 #### Node.js Services
 
 - **Chat I/O**: `tmi.js` IRC client for reading/sending messages
-- **Audio Capture**: Extracts audio from Twitch HLS stream via ffmpeg
+- **Audio Capture**: Uses Streamlink (Python) to get authenticated Twitch audio-only stream URLs, then captures audio via FFmpeg
 - **Bridge**: Forwards messages and audio to Python backend
 
 #### Python Backend (FastAPI)
@@ -197,7 +197,8 @@ Chat Message → Node IRC → Python /chat/message → @mention check
 ### Node.js (Chat & Audio)
 
 - **tmi.js**: Twitch IRC client
-- **ffmpeg / fluent-ffmpeg**: Audio extraction from HLS
+- **streamlink** (Python): Gets authenticated Twitch audio-only stream URLs (handles OAuth, client-integrity tokens)
+- **ffmpeg / fluent-ffmpeg** (Node.js): Audio capture and chunking from authenticated HLS URLs
 - **axios**: HTTP client for Python backend communication
 
 ### Databases
@@ -365,11 +366,25 @@ These changes keep the current single-pass RAG fast while allowing an easy evolu
 **Tasks**:
 
 1. [JCB-15] Twitch Stream Audio Capture (Node)
+   - **Streamlink Integration**: Python endpoint `/api/get-audio-stream-url` uses Streamlink's Python API to obtain authenticated Twitch audio-only stream URLs
+   - **Why Streamlink**: Twitch provides native `audio_only` streams, and Streamlink handles all authentication (OAuth tokens, client-integrity tokens) internally
+   - **Node.js Flow**: Calls Python endpoint to get authenticated HLS URL, then uses FFmpeg to capture and chunk audio
+   - **Benefits**: No manual token management, handles Twitch API changes, supports client-integrity tokens automatically
 2. [JCB-16] faster-whisper Integration
 3. [JCB-17] Audio-to-Transcript Pipeline
 4. [JCB-18] Live Stream Testing
 
 **Success Criteria**: Transcripts appear in DB within 5s during live stream
+
+**Audio Capture Architecture**:
+
+```
+Twitch Stream → Streamlink (Python) → Authenticated HLS URL → FFmpeg (Node) → Audio Chunks → Transcription
+```
+
+- **Streamlink (Python)**: Handles Twitch authentication, returns authenticated `audio_only` HLS URL
+- **FFmpeg (Node.js)**: Captures audio from authenticated URL, chunks into 15-second segments
+- **Audio Format**: Twitch provides native AAC audio at 48kHz stereo, FFmpeg resamples to 16kHz mono for faster-whisper
 
 ---
 

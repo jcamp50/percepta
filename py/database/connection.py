@@ -16,6 +16,11 @@ DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_DB_URL)
 engine: AsyncEngine = create_async_engine(
     DATABASE_URL,
     pool_pre_ping=True,
+    connect_args={
+        "server_settings": {
+            "timezone": "UTC"  # Set session timezone to UTC for consistent display
+        }
+    },
 )
 
 SessionLocal = async_sessionmaker(

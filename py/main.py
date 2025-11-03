@@ -14,11 +14,12 @@ Why FastAPI?
 - Fast and production-ready
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 import logging
+import time
 import uuid
 
 from py.config import settings
@@ -30,8 +31,13 @@ from schemas.messages import (
     ChatResponse,
     RAGQueryRequest,
     RAGAnswerResponse,
+    TranscriptionResponse,
+    AudioStreamUrlResponse,
 )
 from py.reason.rag import RAGService
+from py.ingest.transcription import TranscriptionService
+from py.memory.vector_store import VectorStore
+from py.utils.embeddings import embed_text
 
 # Configure logging
 # TASK: Set up Python logging
@@ -50,6 +56,26 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+# Configure uvicorn access logger to filter chat polling endpoints
+# This reduces log noise from frequent chat polling
+access_logger = logging.getLogger("uvicorn.access")
+
+
+def filter_access_log(record):
+    """Filter out verbose chat polling logs."""
+    message = record.getMessage()
+    # Suppress all /chat/send endpoint logs (polled every 500ms)
+    if message.find("/chat/send") != -1:
+        return False
+    # Suppress all /chat/message endpoint logs (chat messages are too verbose)
+    if message.find("/chat/message") != -1:
+        return False
+    return True
+
+
+# Add filter to access logger
+access_logger.addFilter(filter_access_log)
 
 # Create FastAPI app
 # TASK: Create FastAPI instance
@@ -106,6 +132,24 @@ except ValueError as exc:
     logger.warning("RAG service unavailable: %s", exc)
     rag_service = None
 
+# Initialize transcription service (singleton)
+try:
+    transcription_service: Optional[TranscriptionService] = (
+        TranscriptionService.get_instance()
+    )
+    logger.info("Transcription service initialized")
+except Exception as exc:
+    logger.warning("Transcription service unavailable: %s", exc)
+    transcription_service = None
+
+# Initialize vector store for transcript storage
+try:
+    vector_store: Optional[VectorStore] = VectorStore()
+    logger.info("Vector store initialized")
+except Exception as exc:
+    logger.warning("Vector store unavailable: %s", exc)
+    vector_store = None
+
 # ============================================================================
 # ENDPOINTS
 # ============================================================================
@@ -132,7 +176,7 @@ async def health_check():
     - For simple returns, sync (def) works too
     - We use async for consistency (will need it later)
     """
-    # TODO: Implement health check
+
     return {
         "status": "healthy",
         "service": "percepta-python",
@@ -169,10 +213,13 @@ async def receive_message(message: ChatMessage):
     - Automatically generates API documentation
     - Catches bugs (can't return wrong shape)
     """
-    # TODO: Implement message reception
-    logger.info(
-        f"Received message from {message.username} in #{message.channel}: {message.message}"
-    )
+    # Chat messages - reduce logging verbosity (chat is working)
+    # Only log if it's an @mention or important message
+    if message.message.strip().startswith("@"):
+        logger.debug(
+            f"Received @mention from {message.username} in #{message.channel}: {message.message}"
+        )
+    # Otherwise, silently process (chat I/O is working, focus on audio transcription)
 
     # Check for @mention at start of message
     bot_name = settings.twitch_bot_name or "percepta"  # Fallback if not set
@@ -190,6 +237,57 @@ async def receive_message(message: ChatMessage):
             }
         )
         logger.info(f"Queued response: {response_text}")
+
+    # Check if bot is mentioned with a question (not just ping)
+    elif first_word == f"@{bot_name.lower()}" and rag_service:
+        # Extract question (remove @botname and any leading whitespace)
+        question_tokens = tokens[1:] if len(tokens) > 1 else []
+        question = " ".join(question_tokens).strip()
+
+        # Skip if it was just "ping" (already handled above)
+        if question and question.lower() != "ping":
+            # Validate question has reasonable content
+            if len(question) >= 3:  # Minimum meaningful question
+                try:
+                    # Trigger RAG query asynchronously
+                    result = await rag_service.answer(
+                        channel_id=message.channel,
+                        question=question,
+                        top_k=None,  # Use default from settings
+                        half_life_minutes=None,  # Use default from settings
+                        prefilter_limit=None,  # Use default from settings
+                    )
+
+                    # Extract answer text
+                    answer_text = result.get(
+                        "answer",
+                        "I don't have enough context to answer that right now.",
+                    )
+
+                    # Queue response
+                    message_queue.append(
+                        {
+                            "channel": message.channel,
+                            "message": answer_text,
+                            "reply_to": message.username,
+                        }
+                    )
+
+                    logger.info(
+                        f"Queued RAG response for @{message.username} in #{message.channel}: "
+                        f"{answer_text[:100]}{'...' if len(answer_text) > 100 else ''}"
+                    )
+                except Exception as e:
+                    # Log error but don't crash - gracefully handle RAG failures
+                    logger.error(
+                        f"RAG query failed for @{message.username} in #{message.channel}: {e}",
+                        exc_info=True,
+                    )
+            else:
+                # Question too short/empty
+                logger.debug(
+                    f"Received @mention with empty/short question from {message.username}: '{question}'"
+                )
 
     return MessageReceived(
         received=True,
@@ -225,8 +323,8 @@ async def send_messages(request: SendRequest):
 
     Future: Could use WebSockets for real-time push
     """
-    # TODO: Implement send endpoint
-    logger.debug(f"Send request for channel: {request.channel}")
+    # Chat polling endpoint - keep logs minimal since it's called frequently
+    # logger.debug(f"Send request for channel: {request.channel}")  # Disabled: too verbose
 
     # Filter messages for this channel
     channel_messages = [
@@ -246,7 +344,8 @@ async def send_messages(request: SendRequest):
         message_queue.remove(msg)
 
     if responses:
-        logger.info(
+        # Only log when actually sending messages (not empty polls)
+        logger.debug(
             f"Returning {len(responses)} message(s) for channel {request.channel}"
         )
 
@@ -277,6 +376,259 @@ async def rag_answer(request: RAGQueryRequest):
     return RAGAnswerResponse(**result)
 
 
+@app.get("/api/get-audio-stream-url", response_model=AudioStreamUrlResponse)
+async def get_audio_stream_url(channel_id: str):
+    """
+    Get authenticated Twitch audio-only stream URL using Streamlink.
+
+    This endpoint uses Streamlink's Python API to obtain authenticated HLS URLs
+    for Twitch audio-only streams. Streamlink handles all authentication internally,
+    including OAuth tokens and client-integrity tokens.
+
+    Returns an HLS URL that can be used directly with FFmpeg for audio capture.
+    """
+    try:
+        import streamlink
+
+        # Create Streamlink session
+        session = streamlink.Streamlink()
+
+        # Get streams for the Twitch channel
+        twitch_url = f"https://www.twitch.tv/{channel_id}"
+        streams = session.streams(twitch_url)
+
+        # Get the audio_only stream
+        audio_stream = streams.get("audio_only")
+
+        if audio_stream is None:
+            # Stream is not available (offline or no audio stream)
+            logger.warning(
+                f"Audio-only stream not available for channel {channel_id}. "
+                "Channel may be offline or stream not started."
+            )
+            return AudioStreamUrlResponse(
+                channel_id=channel_id,
+                stream_url="",
+                quality="audio_only",
+                available=False,
+            )
+
+        # Extract the authenticated HLS URL
+        stream_url = audio_stream.url
+
+        logger.info(
+            f"Retrieved audio-only stream URL for channel {channel_id}: "
+            f"{stream_url[:100]}..."  # Log first 100 chars for security
+        )
+
+        return AudioStreamUrlResponse(
+            channel_id=channel_id,
+            stream_url=stream_url,
+            quality="audio_only",
+            available=True,
+        )
+
+    except ImportError:
+        logger.error(
+            "Streamlink not installed. Please install with: pip install streamlink"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Streamlink library not available. Please install streamlink.",
+        )
+    except streamlink.exceptions.NoPluginError:
+        logger.error(f"No Streamlink plugin found for Twitch URL: {twitch_url}")
+        raise HTTPException(
+            status_code=500, detail="Streamlink Twitch plugin not available"
+        )
+    except streamlink.exceptions.PluginError as exc:
+        logger.error(f"Streamlink plugin error for channel {channel_id}: {str(exc)}")
+        raise HTTPException(status_code=502, detail=f"Failed to get stream: {str(exc)}")
+    except Exception as exc:
+        logger.exception(
+            f"Unexpected error getting stream URL for channel {channel_id}"
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get stream URL: {str(exc)}"
+        ) from exc
+
+
+@app.post("/transcribe", response_model=TranscriptionResponse)
+async def transcribe_audio(
+    audio_file: UploadFile = File(..., description="Audio file (WAV format)"),
+    channel_id: str = Form(..., description="Twitch channel identifier"),
+    started_at: str = Form(..., description="ISO timestamp when chunk started"),
+    ended_at: str = Form(..., description="ISO timestamp when chunk ended"),
+):
+    """
+    Transcribe audio chunk from Node service and store in vector DB.
+
+    Complete pipeline: audio → transcription → embedding → vector DB storage.
+    Receives audio chunks from Twitch streams, transcribes them with faster-whisper,
+    generates embeddings, and stores transcripts in pgvector for RAG queries.
+    """
+    if transcription_service is None:
+        raise HTTPException(status_code=503, detail="Transcription service unavailable")
+
+    try:
+        # Read audio file content
+        audio_content = await audio_file.read()
+        file_size = len(audio_content)
+
+        logger.info(
+            f"Received audio chunk: channel={channel_id}, "
+            f"size={file_size} bytes, "
+            f"started_at={started_at}, ended_at={ended_at}"
+        )
+
+        # Validate audio file
+        if file_size == 0:
+            raise HTTPException(status_code=400, detail="Audio file is empty")
+
+        # Transcribe audio using faster-whisper
+        result = await transcription_service.transcribe_async(audio_content)
+
+        # Convert segments to response format using Pydantic models
+        from schemas.messages import TranscriptionSegment, TranscriptionWord
+
+        segments = [
+            TranscriptionSegment(
+                start=seg.start,
+                end=seg.end,
+                text=seg.text,
+                words=[
+                    TranscriptionWord(
+                        word=word["word"],
+                        start=word["start"],
+                        end=word["end"],
+                    )
+                    for word in seg.words
+                ],
+            )
+            for seg in result.segments
+        ]
+
+        # Initialize response fields for storage
+        stored_in_db = False
+        transcript_id = None
+        embedding_latency_ms = None
+        db_insert_latency_ms = None
+
+        # Pipeline: Embedding + Vector DB Storage
+        if vector_store is not None and result.transcript.strip():
+            try:
+                # Parse timestamps as UTC (database stores timezone-aware timestamps in UTC)
+                # PostgreSQL will display them in session timezone (configured in connection.py)
+                start_time_str = (
+                    started_at.replace("Z", "+00:00")
+                    if started_at.endswith("Z")
+                    else started_at
+                )
+                end_time_str = (
+                    ended_at.replace("Z", "+00:00")
+                    if ended_at.endswith("Z")
+                    else ended_at
+                )
+                start_time_obj = datetime.fromisoformat(start_time_str)
+                end_time_obj = datetime.fromisoformat(end_time_str)
+
+                # Generate embedding for transcript text
+                embedding_start = time.perf_counter()
+                try:
+                    embedding = await embed_text(result.transcript)
+                    embedding_elapsed = time.perf_counter() - embedding_start
+                    embedding_latency_ms = int(embedding_elapsed * 1000)
+                    logger.info(
+                        f"Embedding generated: channel={channel_id}, "
+                        f"latency={embedding_latency_ms}ms"
+                    )
+                except Exception as embed_exc:
+                    logger.error(
+                        f"Failed to generate embedding: channel={channel_id}, "
+                        f"error={str(embed_exc)}"
+                    )
+                    raise
+
+                # Insert transcript into vector store
+                db_start = time.perf_counter()
+                try:
+                    inserted_id = await vector_store.insert_transcript(
+                        channel_id=channel_id,
+                        text_value=result.transcript,
+                        start_time=start_time_obj,
+                        end_time=end_time_obj,
+                        embedding=embedding,
+                    )
+                    db_elapsed = time.perf_counter() - db_start
+                    db_insert_latency_ms = int(db_elapsed * 1000)
+                    stored_in_db = True
+                    transcript_id = inserted_id
+                    logger.info(
+                        f"Transcript stored in DB: channel={channel_id}, "
+                        f"id={transcript_id}, latency={db_insert_latency_ms}ms"
+                    )
+                except Exception as db_exc:
+                    logger.error(
+                        f"Failed to insert transcript into DB: channel={channel_id}, "
+                        f"error={str(db_exc)}"
+                    )
+                    raise
+
+            except Exception as pipeline_exc:
+                # Log error but don't fail the entire request
+                # Transcription was successful, so return partial success
+                logger.warning(
+                    f"Pipeline error (embedding/DB): channel={channel_id}, "
+                    f"error={str(pipeline_exc)}. Returning transcription only."
+                )
+
+        # Clear audio content from memory after processing
+        del audio_content
+
+        response = TranscriptionResponse(
+            transcript=result.transcript,
+            segments=segments,
+            language=result.language,
+            duration=result.duration,
+            model=result.model,
+            processing_time_ms=result.processing_time_ms,
+            channel_id=channel_id,
+            started_at=started_at,
+            ended_at=ended_at,
+            stored_in_db=stored_in_db,
+            transcript_id=transcript_id,
+            embedding_latency_ms=embedding_latency_ms,
+            db_insert_latency_ms=db_insert_latency_ms,
+        )
+
+        total_latency = result.processing_time_ms
+        if embedding_latency_ms:
+            total_latency += embedding_latency_ms
+        if db_insert_latency_ms:
+            total_latency += db_insert_latency_ms
+
+        logger.info(
+            f"Pipeline complete: channel={channel_id}, "
+            f"duration={result.duration:.2f}s, "
+            f"transcription={result.processing_time_ms}ms, "
+            f"embedding={embedding_latency_ms}ms, "
+            f"db_insert={db_insert_latency_ms}ms, "
+            f"total={total_latency}ms, "
+            f"stored={stored_in_db}, "
+            f"language={result.language}"
+        )
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to transcribe audio chunk")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to transcribe audio: {str(exc)}"
+        ) from exc
+
+
 # ============================================================================
 # STARTUP/SHUTDOWN
 # ============================================================================
@@ -291,18 +643,17 @@ async def startup_event():
     - Database connection pooling
     - Loading ML models
     - Initializing caches
-
-    TASK: Log startup message
-    - Log at INFO level
-    - Message: f"Percepta Python service starting on {settings.host}:{settings.port}"
-
-    LEARNING NOTE: Lifecycle events
-    - startup: Runs once when server starts
-    - shutdown: Runs once when server stops
-    - Good for resource management
     """
-    # TODO: Log startup message
     logger.info(f"Percepta Python service starting on {settings.host}:{settings.port}")
+
+    # Preload Whisper model to avoid first-request delay
+    if transcription_service is not None:
+        try:
+            logger.info("Preloading Whisper model...")
+            transcription_service.load_model()
+            logger.info("Whisper model loaded and ready")
+        except Exception as exc:
+            logger.warning(f"Failed to preload Whisper model: {exc}")
 
 
 @app.on_event("shutdown")
@@ -324,7 +675,7 @@ async def shutdown_event():
     - Finish pending requests
     - Like the shutdown() function in Node index.js
     """
-    # TODO: Log shutdown message
+
     logger.info("Percepta Python service shutting down")
 
 

@@ -15,9 +15,11 @@
 require('dotenv').config(); // Load .env file
 const axios = require('axios');
 const ChatClient = require('./chat');
+const AudioCapture = require('./audio');
 const logger = require('./utils/logger');
 
 let chatClient = null;
+let audioCapture = null;
 
 /**
  * Validate required environment variables
@@ -43,6 +45,7 @@ function validateEnvironment() {
     'TWITCH_BOT_NAME',
     'TWITCH_BOT_TOKEN',
     'TARGET_CHANNEL',
+    'TWITCH_CLIENT_ID', // Required for audio capture API calls
   ];
   const missingVars = requiredVars.filter((varName) => !process.env[varName]);
   if (missingVars.length > 0) {
@@ -93,6 +96,26 @@ async function main() {
     chatClient.initialize();
     await chatClient.connect();
     logger.success('Percepta bot is now online!');
+
+    // Initialize audio capture
+    audioCapture = new AudioCapture({
+      channel: process.env.TARGET_CHANNEL,
+      pythonServiceUrl: process.env.PYTHON_SERVICE_URL,
+      twitchClientId: process.env.TWITCH_CLIENT_ID,
+      twitchOAuthToken: process.env.TWITCH_BOT_TOKEN,
+      chunkSeconds: parseInt(process.env.AUDIO_CHUNK_SECONDS || '15', 10),
+      sampleRate: parseInt(process.env.AUDIO_SAMPLE_RATE || '16000', 10),
+      channels: parseInt(process.env.AUDIO_CHANNELS || '1', 10),
+    });
+
+    try {
+      await audioCapture.initialize();
+      // Start capturing audio if stream is live
+      await audioCapture.startCapture(process.env.TARGET_CHANNEL);
+    } catch (error) {
+      logger.warn(`Audio capture initialization failed: ${error.message}`);
+      logger.info('Continuing without audio capture (chat bot still functional)');
+    }
   } catch (error) {
     logger.error(`Failed to start: ${error.message}`);
     process.exit(1);
@@ -116,16 +139,26 @@ async function main() {
  * - process.exit(0) indicates successful exit
  */
 async function shutdown() {
-  // Remove parameter
-  if (!chatClient) {
-    // Safety check
-    logger.warn('No client to disconnect');
-    process.exit(0);
-    return;
+  logger.info('Shutting down Percepta Node Service...');
+
+  // Stop audio capture if running
+  if (audioCapture) {
+    try {
+      await audioCapture.stopCapture();
+    } catch (error) {
+      logger.warn(`Error stopping audio capture: ${error.message}`);
+    }
   }
 
-  logger.info('Shutting down Percepta Node Service...');
-  await chatClient.disconnect();
+  // Disconnect chat client
+  if (chatClient) {
+    try {
+      await chatClient.disconnect();
+    } catch (error) {
+      logger.warn(`Error disconnecting chat client: ${error.message}`);
+    }
+  }
+
   logger.success('Percepta Node Service shut down successfully');
   process.exit(0);
 }

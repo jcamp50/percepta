@@ -302,22 +302,42 @@ class RAGService:
 
         if not chunks:
             fallback = "I don't have enough context to answer that right now."
+            # Build prompts for consistency with response schema
+            messages = self._build_messages(
+                question=cleaned_question, formatted_context=[]
+            )
+            system_prompt = messages[0]["content"]
+            user_prompt_text = messages[1]["content"]
             return {
                 "answer": fallback,
                 "citations": [],
                 "chunks": [],
                 "context": [],
+                "prompts": {
+                    "system": system_prompt,
+                    "user": user_prompt_text,
+                },
             }
 
         selected_chunks, formatted_context = self._select_context(chunks)
 
         if not selected_chunks:
             fallback = "I don't have enough context to answer that right now."
+            # Build prompts even when no chunks selected
+            messages = self._build_messages(
+                question=cleaned_question, formatted_context=[]
+            )
+            system_prompt = messages[0]["content"]
+            user_prompt_text = messages[1]["content"]
             return {
                 "answer": fallback,
                 "citations": [],
                 "chunks": [],
                 "context": [],
+                "prompts": {
+                    "system": system_prompt,
+                    "user": user_prompt_text,
+                },
             }
 
         messages = self._build_messages(
