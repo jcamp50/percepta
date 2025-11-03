@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     rag_system_prompt_file: str = "py/reason/prompts/system_prompt.txt"
     rag_user_prompt_file: str = "py/reason/prompts/user_prompt.txt"
 
+    # Whisper Configuration
+    whisper_model: str = "base"  # tiny, base, small, medium, large
+    whisper_language: Optional[str] = "en"  # None for auto-detect
+    use_gpu: bool = False  # Enable GPU if available
+
     class Config:
         """
         Pydantic configuration class

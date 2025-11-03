@@ -146,7 +146,8 @@ class ChatClient {
       return;
 
     const channelName = channel.replace('#', '');
-    logger.chat(channelName, username, message);
+    // Chat logging disabled - focus on audio transcription logs
+    // logger.chat(channelName, username, message);
 
     // Forward message to Python service (fire and forget)
     this._forwardMessageToPython(channelName, username, message);
@@ -283,9 +284,7 @@ class ChatClient {
     this.pollInterval = setInterval(async () => {
       // Skip this iteration if previous poll is still running
       if (this.isPolling) {
-        logger.debug(
-          'Skipping poll iteration - previous poll still in progress'
-        );
+        // Silent skip - polling is working fine, no need to log every skip
         return;
       }
 

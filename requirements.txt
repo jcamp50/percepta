@@ -17,10 +17,11 @@ alembic==1.13.1
 asyncpg==0.29.0
 
 # Speech-to-Text (Phase 3)
-# faster-whisper==1.0.0  # Requires FFmpeg - install in Phase 3
+faster-whisper>=1.0.0  # Requires FFmpeg - already installed for JCB-15
 
 # Twitch Integration
 twitchAPI==4.1.0
+streamlink>=6.0.0  # For getting Twitch audio-only stream URLs
 
 # OpenAI
 openai==1.59.8
