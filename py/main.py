@@ -36,6 +36,7 @@ from schemas.messages import (
 )
 from py.reason.rag import RAGService
 from py.ingest.transcription import TranscriptionService
+from py.ingest.twitch import EventSubWebSocketClient
 from py.memory.vector_store import VectorStore
 from py.utils.embeddings import embed_text
 
@@ -150,6 +151,25 @@ except Exception as exc:
     logger.warning("Vector store unavailable: %s", exc)
     vector_store = None
 
+# Temporary debug - remove after testing
+logger.info(f"Config check - client_id present: {bool(settings.twitch_client_id)}")
+logger.info(f"Config check - token present: {bool(settings.twitch_bot_token)}")
+logger.info(f"Config check - target_channel: {settings.target_channel}")
+
+# Initialize EventSub WebSocket client
+eventsub_client: Optional[EventSubWebSocketClient] = None
+if settings.eventsub_enabled:
+    try:
+        eventsub_client = EventSubWebSocketClient(
+            client_id=settings.twitch_client_id,
+            access_token=settings.twitch_bot_token,
+            target_channel=settings.target_channel,
+        )
+        logger.info("EventSub client initialized")
+    except Exception as exc:
+        logger.warning("EventSub client unavailable: %s", exc)
+        eventsub_client = None
+
 # ============================================================================
 # ENDPOINTS
 # ============================================================================
@@ -164,23 +184,23 @@ async def health_check():
     - Docker health checks
     - Load balancers
     - Monitoring systems
-
-    TASK: Return a dict with:
-    - status: "healthy"
-    - service: "percepta-python"
-    - timestamp: current datetime as ISO string
-
-    LEARNING NOTE: Why async def?
-    - FastAPI supports both sync and async
-    - async is better for I/O operations (DB, API calls)
-    - For simple returns, sync (def) works too
-    - We use async for consistency (will need it later)
     """
+    global eventsub_client
+    eventsub_status = "disconnected"
+    if eventsub_client:
+        if eventsub_client.is_connected:
+            eventsub_status = "connected"
+        else:
+            eventsub_status = "disconnected"
 
     return {
         "status": "healthy",
         "service": "percepta-python",
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "eventsub": {
+            "enabled": settings.eventsub_enabled,
+            "status": eventsub_status,
+        },
     }
 
 
@@ -643,6 +663,7 @@ async def startup_event():
     - Database connection pooling
     - Loading ML models
     - Initializing caches
+    - Starting EventSub WebSocket connection
     """
     logger.info(f"Percepta Python service starting on {settings.host}:{settings.port}")
 
@@ -655,6 +676,15 @@ async def startup_event():
         except Exception as exc:
             logger.warning(f"Failed to preload Whisper model: {exc}")
 
+    # Start EventSub WebSocket connection
+    global eventsub_client
+    if eventsub_client:
+        try:
+            await eventsub_client.connect()
+            logger.info("EventSub WebSocket connection started")
+        except Exception as exc:
+            logger.error(f"Failed to start EventSub connection: {exc}")
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -665,18 +695,18 @@ async def shutdown_event():
     - Closing database connections
     - Saving state
     - Cleanup
-
-    TASK: Log shutdown message
-    - Log at INFO level
-    - Message: "Percepta Python service shutting down"
-
-    LEARNING NOTE: Graceful shutdown
-    - Clean up resources
-    - Finish pending requests
-    - Like the shutdown() function in Node index.js
+    - Closing EventSub WebSocket connection
     """
-
     logger.info("Percepta Python service shutting down")
+
+    # Close EventSub WebSocket connection
+    global eventsub_client
+    if eventsub_client:
+        try:
+            await eventsub_client.disconnect()
+            logger.info("EventSub WebSocket connection closed")
+        except Exception as exc:
+            logger.error(f"Error closing EventSub connection: {exc}")
 
 
 """

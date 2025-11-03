@@ -5,10 +5,14 @@
  *
  * Interactive CLI tool to generate OAuth tokens for Twitch bot authentication.
  * Opens browser for OAuth flow and captures the access token.
+ * Automatically updates TWITCH_BOT_TOKEN in .env file.
  */
 
+require('dotenv').config();
 const express = require('express');
 const readline = require('readline');
+const fs = require('fs');
+const path = require('path');
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -19,28 +23,64 @@ function question(query) {
   return new Promise((resolve) => rl.question(query, resolve));
 }
 
+/**
+ * Update or add TWITCH_BOT_TOKEN in .env file
+ */
+function updateEnvFile(token) {
+  const envPath = path.join(process.cwd(), '.env');
+
+  if (!fs.existsSync(envPath)) {
+    // Create .env file if it doesn't exist
+    fs.writeFileSync(envPath, `TWITCH_BOT_TOKEN=oauth:${token}\n`, 'utf8');
+    return;
+  }
+
+  // Read existing .env file
+  let envContent = fs.readFileSync(envPath, 'utf8');
+
+  // Check if TWITCH_BOT_TOKEN already exists
+  const tokenRegex = /^TWITCH_BOT_TOKEN=.*$/m;
+  const newTokenLine = `TWITCH_BOT_TOKEN=oauth:${token}`;
+
+  if (tokenRegex.test(envContent)) {
+    // Replace existing token
+    envContent = envContent.replace(tokenRegex, newTokenLine);
+  } else {
+    // Append new token (add newline if file doesn't end with one)
+    if (!envContent.endsWith('\n')) {
+      envContent += '\n';
+    }
+    envContent += `${newTokenLine}\n`;
+  }
+
+  // Write back to file
+  fs.writeFileSync(envPath, envContent, 'utf8');
+}
+
 async function main() {
   console.log('\n==============================================');
   console.log('   Twitch OAuth Token Generator');
   console.log('   Percepta Bot Authentication Setup');
   console.log('==============================================\n');
 
-  console.log(
-    'This tool will help you generate an OAuth token for your Twitch bot.\n'
-  );
-  console.log('Required scopes:');
-  console.log('  • chat:read  - Read chat messages');
-  console.log('  • chat:edit  - Send chat messages\n');
-
-  // Get credentials
-  const clientId = await question('Enter your Twitch Client ID: ');
-  const clientSecret = await question('Enter your Twitch Client Secret: ');
+  // Load credentials from .env
+  const clientId = process.env.TWITCH_CLIENT_ID;
+  const clientSecret = process.env.TWITCH_CLIENT_SECRET;
 
   if (!clientId || !clientSecret) {
-    console.error('\n❌ Error: Client ID and Client Secret are required.');
+    console.error(
+      '\n❌ Error: TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET must be set in .env file.'
+    );
+    console.error('Please add them to your .env file and try again.\n');
     rl.close();
     process.exit(1);
   }
+
+  console.log('✓ Found credentials in .env file');
+  console.log(`  Client ID: ${clientId.substring(0, 8)}...`);
+  console.log('\nRequired scopes:');
+  console.log('  • chat:read  - Read chat messages');
+  console.log('  • chat:edit  - Send chat messages\n');
 
   console.log('\n📋 Setting up local server to handle OAuth callback...');
 
@@ -129,11 +169,21 @@ async function main() {
 
       console.log('\n✓ Access token received!');
       console.log(`✓ Scopes granted: ${scopes.join(', ')}`);
-      console.log('\n==============================================');
-      console.log('   Copy this to your .env file:');
-      console.log('==============================================\n');
-      console.log(`TWITCH_BOT_TOKEN=oauth:${accessToken}\n`);
-      console.log('==============================================\n');
+
+      // Update .env file automatically
+      try {
+        updateEnvFile(accessToken);
+        console.log('\n✓ Successfully updated TWITCH_BOT_TOKEN in .env file!');
+        console.log('  The token has been saved and is ready to use.\n');
+      } catch (error) {
+        console.error('\n⚠️  Failed to update .env file automatically.');
+        console.error('   Error:', error.message);
+        console.log('\n==============================================');
+        console.log('   Please manually add this to your .env file:');
+        console.log('==============================================\n');
+        console.log(`TWITCH_BOT_TOKEN=oauth:${accessToken}\n`);
+        console.log('==============================================\n');
+      }
 
       // Give the response time to send before closing
       setTimeout(() => {

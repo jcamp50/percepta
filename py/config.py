@@ -60,6 +60,16 @@ class Settings(BaseSettings):
     whisper_language: Optional[str] = "en"  # None for auto-detect
     use_gpu: bool = False  # Enable GPU if available
 
+    # Twitch Configuration
+    twitch_client_id: Optional[str] = None
+    twitch_bot_token: Optional[str] = None
+    target_channel: Optional[str] = None  # Channel to monitor (e.g., "channelname")
+    
+    # EventSub WebSocket Configuration
+    eventsub_enabled: bool = True  # Enable/disable EventSub client
+    eventsub_reconnect_delay: int = 5  # Initial reconnect delay in seconds
+    eventsub_max_reconnect_delay: int = 60  # Maximum reconnect delay in seconds
+
     class Config:
         """
         Pydantic configuration class
