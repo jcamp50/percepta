@@ -801,10 +801,9 @@ class AudioCapture {
     // Get broadcaster ID for this channel
     this.broadcasterId = await this._getBroadcasterId(channelId);
     if (!this.broadcasterId) {
-      logger.error(
-        `Failed to get broadcaster ID for ${channelId}, cannot start capture`
-      );
-      return;
+      const errMsg = `Failed to get broadcaster ID for ${channelId}, cannot start capture`;
+      logger.error(errMsg);
+      throw new Error(errMsg);
     }
     logger.info(
       `Resolved channel ${channelId} to broadcaster ID: ${this.broadcasterId}`
