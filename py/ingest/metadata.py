@@ -111,6 +111,7 @@ class ChannelMetadataPoller:
             try:
                 await self.poll_task
             except asyncio.CancelledError:
+                # Task cancellation is expected when stopping the poller; ignore this exception.
                 pass
             self.poll_task = None
 
