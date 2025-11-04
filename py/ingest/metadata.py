@@ -252,8 +252,8 @@ class ChannelMetadataPoller:
                     started_at = datetime.fromisoformat(
                         started_at_str.replace("Z", "+00:00")
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Failed to parse started_at timestamp '{started_at_str}': {e}")
 
             return StreamInfo(
                 id=stream_data.get("id"),
