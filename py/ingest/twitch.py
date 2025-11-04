@@ -158,6 +158,7 @@ class EventSubWebSocketClient:
             try:
                 await self.reconnect_task
             except asyncio.CancelledError:
+                # Task cancellation is expected when disconnecting; ignore this exception.
                 pass
             self.reconnect_task = None
 
