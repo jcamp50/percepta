@@ -267,8 +267,8 @@ class EventSubWebSocketClient:
             if self.ws:
                 try:
                     await self.ws.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.error(f"Error closing websocket during reconnect: {e}")
 
             # Reconnect to new URL
             try:
