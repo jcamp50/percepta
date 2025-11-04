@@ -11,7 +11,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, Any
 import httpx
 import websockets
 from websockets.client import WebSocketClientProtocol
@@ -42,13 +42,21 @@ class EventSubWebSocketClient:
         client_id: Optional[str] = None,
         access_token: Optional[str] = None,
         target_channel: Optional[str] = None,
+        event_handler: Optional[Any] = None,
     ):
         """
         Initialize EventSub WebSocket client.
+
+        Args:
+            client_id: Twitch Client ID
+            access_token: Twitch access token
+            target_channel: Target channel name
+            event_handler: Optional EventHandler instance for processing events
         """
         self.client_id = client_id or settings.twitch_client_id
         self.access_token = access_token or settings.twitch_bot_token
         self.target_channel = target_channel or settings.target_channel
+        self.event_handler = event_handler
 
         # Debug logging to verify values are loaded
         if not self.client_id:
@@ -509,7 +517,13 @@ class EventSubWebSocketClient:
                 f"Stream went online: {event.broadcaster_user_name} "
                 f"at {event.started_at}"
             )
-            # TODO: Forward to ingest pipeline (JCB-21)
+
+            # Forward to event handler if available
+            if self.event_handler:
+                await self.event_handler.handle_stream_online(
+                    event=event,
+                    payload_json=event_data,
+                )
         except Exception as e:
             logger.error(f"Error processing stream.online event: {e}")
 
@@ -518,7 +532,13 @@ class EventSubWebSocketClient:
         try:
             event = StreamOfflineEvent(**event_data)
             logger.info(f"Stream went offline: {event.broadcaster_user_name}")
-            # TODO: Forward to ingest pipeline (JCB-21)
+
+            # Forward to event handler if available
+            if self.event_handler:
+                await self.event_handler.handle_stream_offline(
+                    event=event,
+                    payload_json=event_data,
+                )
         except Exception as e:
             logger.error(f"Error processing stream.offline event: {e}")
 
@@ -530,7 +550,13 @@ class EventSubWebSocketClient:
                 f"Raid received: {event.from_broadcaster_user_name} → "
                 f"{event.to_broadcaster_user_name} ({event.viewers} viewers)"
             )
-            # TODO: Forward to ingest pipeline (JCB-21)
+
+            # Forward to event handler if available
+            if self.event_handler:
+                await self.event_handler.handle_channel_raid(
+                    event=event,
+                    payload_json=event_data,
+                )
         except Exception as e:
             logger.error(f"Error processing channel.raid event: {e}")
 
@@ -542,6 +568,12 @@ class EventSubWebSocketClient:
                 f"Subscription: {event.user_name} subscribed to "
                 f"{event.broadcaster_user_name} (Tier {event.tier})"
             )
-            # TODO: Forward to ingest pipeline (JCB-21)
+
+            # Forward to event handler if available
+            if self.event_handler:
+                await self.event_handler.handle_channel_subscribe(
+                    event=event,
+                    payload_json=event_data,
+                )
         except Exception as e:
             logger.error(f"Error processing channel.subscribe event: {e}")

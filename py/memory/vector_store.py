@@ -8,7 +8,7 @@ from sqlalchemy import text, String, Integer, bindparam
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from py.database.connection import SessionLocal
-from py.database.models import Transcript, ChannelSnapshot
+from py.database.models import Transcript, ChannelSnapshot, Event
 
 
 def _vector_literal(values: List[float]) -> str:
@@ -144,7 +144,7 @@ class VectorStore:
     ) -> str:
         """
         Insert a channel snapshot into the database.
-        
+
         Args:
             channel_id: Broadcaster user ID
             title: Stream title
@@ -154,7 +154,7 @@ class VectorStore:
             viewer_count: Current viewer count (if live)
             payload_json: Full API response for debugging
             embedding: Vector embedding (optional, for JCB-21)
-            
+
         Returns:
             Snapshot ID as string
         """
@@ -181,10 +181,10 @@ class VectorStore:
     ) -> Optional[Dict[str, Any]]:
         """
         Get the most recent channel snapshot for a channel.
-        
+
         Args:
             channel_id: Broadcaster user ID
-            
+
         Returns:
             Dictionary with snapshot data, or None if not found
         """
@@ -197,11 +197,9 @@ class VectorStore:
         LIMIT 1
         """
         async with self.session_factory() as session:
-            result = await session.execute(
-                text(sql), {"channel_id": channel_id}
-            )
+            result = await session.execute(text(sql), {"channel_id": channel_id})
             row = result.mappings().first()
-            
+
             if row:
                 return {
                     "id": str(row["id"]),
@@ -215,3 +213,122 @@ class VectorStore:
                     "payload_json": row["payload_json"],
                 }
             return None
+
+    async def insert_event(
+        self,
+        channel_id: str,
+        event_type: str,
+        timestamp: datetime,
+        summary: str,
+        payload_json: Optional[Dict[str, Any]] = None,
+        embedding: Optional[List[float]] = None,
+    ) -> str:
+        """
+        Insert an event into the database.
+
+        Args:
+            channel_id: Broadcaster user ID
+            event_type: Type of event (e.g., "stream.online")
+            timestamp: Event timestamp
+            summary: Human-readable summary
+            payload_json: Raw event payload for debugging
+            embedding: Vector embedding (optional)
+
+        Returns:
+            Event ID as string
+        """
+        new_id = uuid.uuid4()
+        async with self.session_factory() as session:
+            entity = Event(
+                id=new_id,
+                channel_id=channel_id,
+                ts=timestamp,
+                type=event_type,
+                summary=summary,
+                payload_json=payload_json,
+                embedding=embedding,
+            )
+            session.add(entity)
+            await session.commit()
+        return str(new_id)
+
+    async def search_events(
+        self,
+        query_embedding: List[float],
+        limit: int = 5,
+        half_life_minutes: int = 60,
+        channel_id: Optional[str] = None,
+        prefilter_limit: int = 200,
+    ) -> List[Dict[str, Any]]:
+        """
+        Search events using vector similarity with time-decay scoring.
+
+        Args:
+            query_embedding: Query vector embedding
+            limit: Maximum number of results to return
+            half_life_minutes: Half-life for time decay scoring
+            channel_id: Optional channel ID to filter by
+            prefilter_limit: Maximum candidates to consider before time decay
+
+        Returns:
+            List of event dictionaries with scores
+        """
+        if prefilter_limit < limit:
+            prefilter_limit = max(limit, 1)
+
+        vec_str = _vector_literal(query_embedding)
+        half_life_seconds = half_life_minutes * 60
+
+        # Only search events that have embeddings (non-null)
+        cosine_order = "embedding <=> (:vec)::vector"
+        sql = f"""
+            WITH pre AS (
+            SELECT id, channel_id, ts, type, summary,
+                    {cosine_order} AS dist
+            FROM events
+            WHERE embedding IS NOT NULL
+            AND (:channel_id IS NULL OR channel_id = :channel_id)
+            ORDER BY {cosine_order}
+            LIMIT :k
+            )
+            SELECT id, channel_id, ts, type, summary, dist,
+                dist / POWER(2, EXTRACT(EPOCH FROM (NOW() - ts)) / :half_life_seconds) AS score
+            FROM pre
+            ORDER BY score ASC
+            LIMIT :limit
+            """
+
+        async with self.session_factory() as session:
+            stmt = text(sql).bindparams(
+                bindparam("vec", type_=String()),
+                bindparam("channel_id", type_=String()),
+                bindparam("k", type_=Integer()),
+                bindparam("half_life_seconds", type_=Integer()),
+                bindparam("limit", type_=Integer()),
+            )
+            result = await session.execute(
+                stmt,
+                {
+                    "vec": vec_str,
+                    "channel_id": channel_id,
+                    "k": prefilter_limit,
+                    "half_life_seconds": half_life_seconds,
+                    "limit": limit,
+                },
+            )
+            rows = result.mappings().all()
+
+        output: List[Dict[str, Any]] = []
+        for row in rows:
+            output.append(
+                {
+                    "id": str(row["id"]),
+                    "channel_id": row["channel_id"],
+                    "ts": row["ts"],
+                    "type": row["type"],
+                    "summary": row["summary"],
+                    "cosine_distance": float(row["dist"]),
+                    "score": float(row["score"]),
+                }
+            )
+        return output
