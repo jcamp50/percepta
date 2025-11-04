@@ -154,16 +154,6 @@ except Exception as exc:
     vector_store = None
 
 
-# Initialize event handler for EventSub events
-event_handler: Optional[EventHandler] = None
-if vector_store:
-    try:
-        event_handler = EventHandler(vector_store=vector_store)
-        logger.info("Event handler initialized")
-    except Exception as exc:
-        logger.warning("Event handler unavailable: %s", exc)
-        event_handler = None
-
 # Initialize EventSub WebSocket client
 eventsub_client: Optional[EventSubWebSocketClient] = None
 if settings.eventsub_enabled:
@@ -172,7 +162,6 @@ if settings.eventsub_enabled:
             client_id=settings.twitch_client_id,
             access_token=settings.twitch_bot_token,
             target_channel=settings.target_channel,
-            event_handler=event_handler,
         )
         logger.info("EventSub client initialized")
     except Exception as exc:
