@@ -8,7 +8,7 @@ from sqlalchemy import text, String, Integer, bindparam
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from py.database.connection import SessionLocal
-from py.database.models import Transcript
+from py.database.models import Transcript, ChannelSnapshot
 
 
 def _vector_literal(values: List[float]) -> str:
@@ -130,3 +130,88 @@ class VectorStore:
             # rowcount can be -1 with some drivers; coerce to int >= 0
             count = result.rowcount if result.rowcount is not None else 0
         return int(count)
+
+    async def insert_channel_snapshot(
+        self,
+        channel_id: str,
+        title: Optional[str] = None,
+        game_id: Optional[str] = None,
+        game_name: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        viewer_count: Optional[int] = None,
+        payload_json: Optional[Dict[str, Any]] = None,
+        embedding: Optional[List[float]] = None,
+    ) -> str:
+        """
+        Insert a channel snapshot into the database.
+        
+        Args:
+            channel_id: Broadcaster user ID
+            title: Stream title
+            game_id: Game/category ID
+            game_name: Game/category name
+            tags: List of stream tags
+            viewer_count: Current viewer count (if live)
+            payload_json: Full API response for debugging
+            embedding: Vector embedding (optional, for JCB-21)
+            
+        Returns:
+            Snapshot ID as string
+        """
+        new_id = uuid.uuid4()
+        async with self.session_factory() as session:
+            entity = ChannelSnapshot(
+                id=new_id,
+                channel_id=channel_id,
+                ts=datetime.now(),
+                title=title,
+                game_id=game_id,
+                game_name=game_name,
+                tags=tags,
+                viewer_count=viewer_count,
+                payload_json=payload_json,
+                embedding=embedding,
+            )
+            session.add(entity)
+            await session.commit()
+        return str(new_id)
+
+    async def get_latest_channel_snapshot(
+        self, channel_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get the most recent channel snapshot for a channel.
+        
+        Args:
+            channel_id: Broadcaster user ID
+            
+        Returns:
+            Dictionary with snapshot data, or None if not found
+        """
+        sql = """
+        SELECT id, channel_id, ts, title, game_id, game_name, tags, 
+               viewer_count, payload_json
+        FROM channel_snapshots
+        WHERE channel_id = :channel_id
+        ORDER BY ts DESC
+        LIMIT 1
+        """
+        async with self.session_factory() as session:
+            result = await session.execute(
+                text(sql), {"channel_id": channel_id}
+            )
+            row = result.mappings().first()
+            
+            if row:
+                return {
+                    "id": str(row["id"]),
+                    "channel_id": row["channel_id"],
+                    "ts": row["ts"],
+                    "title": row["title"],
+                    "game_id": row["game_id"],
+                    "game_name": row["game_name"],
+                    "tags": row["tags"],
+                    "viewer_count": row["viewer_count"],
+                    "payload_json": row["payload_json"],
+                }
+            return None

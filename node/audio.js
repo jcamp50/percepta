@@ -48,6 +48,7 @@ class AudioCapture {
     this.ffmpegProcess = null;
     this.streamMonitorInterval = null;
     this.currentChunkStartTime = null;
+    this.broadcasterId = null; // Will be set when capture starts
   }
 
   /**
@@ -690,8 +691,9 @@ class AudioCapture {
           processedChunks.add(chunkKey);
 
           // Send to Python service
+          // Use broadcaster ID instead of channel name for consistency
           await this._sendChunkToPython(chunkBuffer, {
-            channel_id: channelId,
+            channel_id: this.broadcasterId || channelId, // Fallback to channel name if broadcaster ID not available
             started_at: chunkStartTime.toISOString(),
             ended_at: chunkEndTime.toISOString(),
           });
@@ -762,6 +764,31 @@ class AudioCapture {
   }
 
   /**
+   * Get broadcaster ID from channel name
+   * @param {string} channelName - Channel name (without #)
+   * @returns {Promise<string|null>} Broadcaster ID or null if not found
+   */
+  async _getBroadcasterId(channelName) {
+    try {
+      const response = await axios.get(
+        `${this.pythonServiceUrl}/api/get-broadcaster-id`,
+        {
+          params: {
+            channel_name: channelName,
+          },
+          timeout: 5000,
+        }
+      );
+      return response.data.broadcaster_id || null;
+    } catch (error) {
+      logger.error(
+        `Failed to get broadcaster ID for ${channelName}: ${error.message}`
+      );
+      return null;
+    }
+  }
+
+  /**
    * Start capturing audio from Twitch stream
    * @param {string} channelId - Channel name (without #)
    */
@@ -770,6 +797,18 @@ class AudioCapture {
       logger.warn(`Audio capture already running for ${channelId}`);
       return;
     }
+
+    // Get broadcaster ID for this channel
+    this.broadcasterId = await this._getBroadcasterId(channelId);
+    if (!this.broadcasterId) {
+      logger.error(
+        `Failed to get broadcaster ID for ${channelId}, cannot start capture`
+      );
+      return;
+    }
+    logger.info(
+      `Resolved channel ${channelId} to broadcaster ID: ${this.broadcasterId}`
+    );
 
     // Get HLS URL
     const hlsUrl = await this._getHlsUrl(channelId);

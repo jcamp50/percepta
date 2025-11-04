@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     eventsub_enabled: bool = True  # Enable/disable EventSub client
     eventsub_reconnect_delay: int = 5  # Initial reconnect delay in seconds
     eventsub_max_reconnect_delay: int = 60  # Maximum reconnect delay in seconds
+    
+    # Channel Metadata Polling Configuration
+    metadata_poll_enabled: bool = True  # Enable/disable metadata polling
+    metadata_poll_interval_seconds: int = 60  # Poll every 60 seconds
 
     class Config:
         """
