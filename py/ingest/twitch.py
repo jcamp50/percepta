@@ -171,7 +171,8 @@ class EventSubWebSocketClient:
             self.ws = None
 
         # Close HTTP client
-        await self.http_client.aclose()
+        if self.http_client:
+            await self.http_client.aclose()
 
         logger.info("Disconnected from EventSub WebSocket")
 
