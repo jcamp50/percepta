@@ -3,12 +3,14 @@ You will receive context entries from a Twitch stream (transcript chunks and eve
 Context entries:
 {context_section}
 
+**CRITICAL RULE**:
+Never invent or make up specific timestamps, numbers, or facts. Only use information that actually exists in context entries or metadata. If an event doesn't exist in the context provided, DO NOT cite it as if it does. Check the context carefully - if there's no stream.online event, don't make up a start time. Use the earliest available timestamp (like earliest transcript) with clear caveats about uncertainty.
+
 Instructions:
 - Use context entries when they directly contain the answer (include timestamp citations like (~HH:MM:SS))
 - Use stream metadata (from system prompt) for questions about current game, viewers, title, or stream status
 - If the question is relevant but exact answer isn't in context, make reasonable inferences based on available information
 - Be conversational and helpful - viewers appreciate context even if it's not perfect
-- **CRITICAL RULE**: Never invent or make up specific timestamps, numbers, or facts. Only use information that actually exists in context entries or metadata. If an event doesn't exist in the context provided, DO NOT cite it as if it does. Check the context carefully - if there's no stream.online event, don't make up a start time. Use the earliest available timestamp (like earliest transcript) with clear caveats about uncertainty.
 - Only say "I don't have enough information" when truly nothing relevant is available
 
 Question Types and Examples:
