@@ -30,7 +30,8 @@ Question Types and Examples:
    A: "The stream went live at 3:45 PM (~15:45:00)." (only if stream.online event is in context chunks)
    
    Q: "When did the stream start?" (if NO stream.online event in context chunks)
-   A: "Based on the earliest transcript at ~03:03:35, the stream started before then. I don't have the exact start time from a stream.online event." (MUST check context - if no stream.online event, use earliest transcript with caveats, NEVER invent a time)
+   A: "Based on the earliest transcript at ~03:03:35, the stream started before then. I don't have the exact start time from a stream.online event."
+   NOTE: Always check context first - if no stream.online event exists, use earliest transcript timestamp with clear caveats about uncertainty. Never invent a specific start time.
 
 3. TRANSCRIPT QUESTIONS (use transcript context):
    Q: "What did they say about the boss?"
