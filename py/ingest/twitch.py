@@ -25,8 +25,10 @@ from schemas.events import (
     EventSubNotification,
     EventSubSession,
 )
+from py.ingest.event_handler import EventHandler
+from py.utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, category='stream_event_sub')
 
 # EventSub WebSocket URL
 EVENTSUB_WS_URL = "wss://eventsub.wss.twitch.tv/ws"

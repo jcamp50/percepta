@@ -50,19 +50,20 @@ function validateEnvironment() {
   const missingVars = requiredVars.filter((varName) => !process.env[varName]);
   if (missingVars.length > 0) {
     logger.error(
-      `Missing required environment variables: ${missingVars.join(', ')}`
+      `Missing required environment variables: ${missingVars.join(', ')}`,
+      'system'
     );
-    logger.info('Please check your .env file and try again.');
+    logger.info('Please check your .env file and try again.', 'system');
     process.exit(1);
   }
 
   // Set default for Python service URL if not provided
   if (!process.env.PYTHON_SERVICE_URL) {
     process.env.PYTHON_SERVICE_URL = 'http://localhost:8000';
-    logger.info('Using default PYTHON_SERVICE_URL: http://localhost:8000');
+    logger.info('Using default PYTHON_SERVICE_URL: http://localhost:8000', 'system');
   }
 
-  logger.success('Environment variables validated successfully');
+  logger.success('Environment variables validated successfully', 'system');
 }
 
 /**
@@ -85,7 +86,7 @@ function validateEnvironment() {
 async function main() {
   try {
     // TODO: Implement main logic
-    logger.info('Starting Percepta Node Service...');
+    logger.info('Starting Percepta Node Service...', 'system');
     validateEnvironment();
     chatClient = new ChatClient({
       botName: process.env.TWITCH_BOT_NAME,
@@ -95,7 +96,7 @@ async function main() {
     });
     chatClient.initialize();
     await chatClient.connect();
-    logger.success('Percepta bot is now online!');
+    logger.success('Percepta bot is now online!', 'system');
 
     // Initialize audio capture
     audioCapture = new AudioCapture({
@@ -113,11 +114,11 @@ async function main() {
       // Start capturing audio if stream is live
       await audioCapture.startCapture(process.env.TARGET_CHANNEL);
     } catch (error) {
-      logger.warn(`Audio capture initialization failed: ${error.message}`);
-      logger.info('Continuing without audio capture (chat bot still functional)');
+      logger.warn(`Audio capture initialization failed: ${error.message}`, 'system');
+      logger.info('Continuing without audio capture (chat bot still functional)', 'system');
     }
   } catch (error) {
-    logger.error(`Failed to start: ${error.message}`);
+    logger.error(`Failed to start: ${error.message}`, 'system');
     process.exit(1);
   }
 }
@@ -139,14 +140,14 @@ async function main() {
  * - process.exit(0) indicates successful exit
  */
 async function shutdown() {
-  logger.info('Shutting down Percepta Node Service...');
+  logger.info('Shutting down Percepta Node Service...', 'system');
 
   // Stop audio capture if running
   if (audioCapture) {
     try {
       await audioCapture.stopCapture();
     } catch (error) {
-      logger.warn(`Error stopping audio capture: ${error.message}`);
+      logger.warn(`Error stopping audio capture: ${error.message}`, 'system');
     }
   }
 
@@ -155,11 +156,11 @@ async function shutdown() {
     try {
       await chatClient.disconnect();
     } catch (error) {
-      logger.warn(`Error disconnecting chat client: ${error.message}`);
+      logger.warn(`Error disconnecting chat client: ${error.message}`, 'system');
     }
   }
 
-  logger.success('Percepta Node Service shut down successfully');
+  logger.success('Percepta Node Service shut down successfully', 'system');
   process.exit(0);
 }
 

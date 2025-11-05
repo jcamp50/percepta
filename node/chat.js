@@ -76,7 +76,7 @@ class ChatClient {
     });
     // TODO: Call this._setupEventHandlers()
     this._setupEventHandlers();
-    logger.info('Chat client initialized');
+    logger.info('Chat client initialized', 'chat');
   }
 
   /**
@@ -112,9 +112,9 @@ class ChatClient {
   _onConnected(address, port) {
     this.isConnected = true;
     // TODO: Log success message with address and port
-    logger.success(`Connected to ${address}:${port}`);
+    logger.success(`Connected to ${address}:${port}`, 'chat');
     // TODO: Log which channel was joined
-    logger.info(`Joined channel ${this.config.channel}`);
+    logger.info(`Joined channel ${this.config.channel}`, 'chat');
   }
 
   /**
@@ -146,8 +146,8 @@ class ChatClient {
       return;
 
     const channelName = channel.replace('#', '');
-    // Chat logging disabled - focus on audio transcription logs
-    // logger.chat(channelName, username, message);
+    // Log chat message (can be filtered via LOG_CATEGORIES=chat)
+    logger.chat(channelName, username, message, 'chat');
 
     // Forward message to Python service (fire and forget)
     this._forwardMessageToPython(channelName, username, message);
@@ -171,7 +171,7 @@ class ChatClient {
       })
       .catch((error) => {
         // Log error but don't crash (Python might be down)
-        logger.warn(`Failed to forward message to Python: ${error.message}`);
+        logger.warn(`Failed to forward message to Python: ${error.message}`, 'chat');
       });
   }
 
@@ -182,7 +182,7 @@ class ChatClient {
   _onDisconnected(reason) {
     this.isConnected = false;
     // TODO: Log warning with reason
-    logger.warn(`Disconnected from ${this.config.channel}: ${reason}`);
+    logger.warn(`Disconnected from ${this.config.channel}: ${reason}`, 'chat');
     // The client will auto-reconnect due to our config
   }
 
@@ -191,7 +191,7 @@ class ChatClient {
    */
   _onReconnect() {
     // TODO: Log info message about reconnecting
-    logger.info(`Attempting to reconnect to ${this.config.channel}...`);
+    logger.info(`Attempting to reconnect to ${this.config.channel}...`, 'chat');
   }
 
   /**
@@ -211,12 +211,12 @@ class ChatClient {
     // HINT: try/catch for error handling
     try {
       await this.client.connect();
-      logger.success('Connected to Twitch IRC');
+      logger.success('Connected to Twitch IRC', 'chat');
 
       // Start polling for responses from Python
       this.startPolling();
     } catch (error) {
-      logger.error(`Failed to connect to Twitch IRC: ${error.message}`);
+      logger.error(`Failed to connect to Twitch IRC: ${error.message}`, 'chat');
       throw error;
     }
   }
@@ -238,9 +238,9 @@ class ChatClient {
     try {
       await this.client.disconnect();
       this.isConnected = false;
-      logger.info('Disconnected from Twitch IRC');
+      logger.info('Disconnected from Twitch IRC', 'chat');
     } catch (error) {
-      logger.error(`Failed to disconnect from Twitch IRC: ${error.message}`);
+      logger.error(`Failed to disconnect from Twitch IRC: ${error.message}`, 'chat');
       throw error;
     }
   }
@@ -267,9 +267,9 @@ class ChatClient {
     }
     try {
       await this.client.say(channel, message);
-      logger.success(`Sent message to ${channel}: ${message}`);
+      logger.success(`Sent message to ${channel}: ${message}`, 'chat');
     } catch (error) {
-      logger.error(`Failed to send message to ${channel}: ${error.message}`);
+      logger.error(`Failed to send message to ${channel}: ${error.message}`, 'chat');
       throw error;
     }
   }
@@ -279,7 +279,7 @@ class ChatClient {
    * Polls every 500ms with protection against overlapping executions
    */
   startPolling() {
-    logger.info('Starting polling for Python responses (500ms interval)');
+    logger.info('Starting polling for Python responses (500ms interval)', 'chat');
 
     this.pollInterval = setInterval(async () => {
       // Skip this iteration if previous poll is still running
@@ -312,7 +312,7 @@ class ChatClient {
         // Log error but don't crash polling
         if (error.code !== 'ECONNREFUSED') {
           // Only log non-connection errors to reduce spam
-          logger.warn(`Polling error: ${error.message}`);
+          logger.warn(`Polling error: ${error.message}`, 'chat');
         }
       } finally {
         // Always release the lock, even if an error occurred

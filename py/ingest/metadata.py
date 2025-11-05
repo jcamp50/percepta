@@ -16,8 +16,9 @@ import httpx
 from py.config import settings
 from py.memory.vector_store import VectorStore
 from schemas.metadata import ChannelMetadata, ChannelInfo, StreamInfo
+from py.utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, category='stream_metadata')
 
 # Helix API base URL
 HELIX_API_BASE = "https://api.twitch.tv/helix"

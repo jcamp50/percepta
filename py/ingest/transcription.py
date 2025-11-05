@@ -21,8 +21,9 @@ except ImportError:
     WhisperModel = None
 
 from py.config import settings
+from py.utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, category='audio')
 
 
 class TranscriptionSegment:
