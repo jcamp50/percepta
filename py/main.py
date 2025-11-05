@@ -36,6 +36,9 @@ from schemas.messages import (
 )
 from py.reason.rag import RAGService
 from py.ingest.transcription import TranscriptionService
+from py.ingest.twitch import EventSubWebSocketClient
+from py.ingest.metadata import ChannelMetadataPoller
+from py.ingest.event_handler import EventHandler
 from py.memory.vector_store import VectorStore
 from py.utils.embeddings import embed_text
 
@@ -150,6 +153,36 @@ except Exception as exc:
     logger.warning("Vector store unavailable: %s", exc)
     vector_store = None
 
+
+# Initialize EventSub WebSocket client
+eventsub_client: Optional[EventSubWebSocketClient] = None
+if settings.eventsub_enabled:
+    try:
+        eventsub_client = EventSubWebSocketClient(
+            client_id=settings.twitch_client_id,
+            access_token=settings.twitch_bot_token,
+            target_channel=settings.target_channel,
+        )
+        logger.info("EventSub client initialized")
+    except Exception as exc:
+        logger.warning("EventSub client unavailable: %s", exc)
+        eventsub_client = None
+
+# Initialize channel metadata poller
+metadata_poller: Optional[ChannelMetadataPoller] = None
+if settings.metadata_poll_enabled:
+    try:
+        metadata_poller = ChannelMetadataPoller(
+            client_id=settings.twitch_client_id,
+            access_token=settings.twitch_bot_token,
+            target_channel=settings.target_channel,
+            vector_store=vector_store,
+        )
+        logger.info("Metadata poller initialized")
+    except Exception as exc:
+        logger.warning("Metadata poller unavailable: %s", exc)
+        metadata_poller = None
+
 # ============================================================================
 # ENDPOINTS
 # ============================================================================
@@ -164,23 +197,23 @@ async def health_check():
     - Docker health checks
     - Load balancers
     - Monitoring systems
-
-    TASK: Return a dict with:
-    - status: "healthy"
-    - service: "percepta-python"
-    - timestamp: current datetime as ISO string
-
-    LEARNING NOTE: Why async def?
-    - FastAPI supports both sync and async
-    - async is better for I/O operations (DB, API calls)
-    - For simple returns, sync (def) works too
-    - We use async for consistency (will need it later)
     """
+    global eventsub_client
+    eventsub_status = "disconnected"
+    if eventsub_client:
+        if eventsub_client.is_connected:
+            eventsub_status = "connected"
+        else:
+            eventsub_status = "disconnected"
 
     return {
         "status": "healthy",
         "service": "percepta-python",
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "eventsub": {
+            "enabled": settings.eventsub_enabled,
+            "status": eventsub_status,
+        },
     }
 
 
@@ -249,9 +282,22 @@ async def receive_message(message: ChatMessage):
             # Validate question has reasonable content
             if len(question) >= 3:  # Minimum meaningful question
                 try:
+                    # Convert channel name to broadcaster ID for RAG queries
+                    channel_broadcaster_id = message.channel
+                    if eventsub_client and eventsub_client.http_client:
+                        try:
+                            broadcaster_id = await eventsub_client._get_broadcaster_id(
+                                message.channel
+                            )
+                            if broadcaster_id:
+                                channel_broadcaster_id = broadcaster_id
+                        except Exception:
+                            # Fallback to channel name if conversion fails
+                            pass
+
                     # Trigger RAG query asynchronously
                     result = await rag_service.answer(
-                        channel_id=message.channel,
+                        channel_id=channel_broadcaster_id,
                         question=question,
                         top_k=None,  # Use default from settings
                         half_life_minutes=None,  # Use default from settings
@@ -359,9 +405,26 @@ async def rag_answer(request: RAGQueryRequest):
     if rag_service is None:
         raise HTTPException(status_code=503, detail="RAG service unavailable")
 
+    # Convert channel name to broadcaster ID if needed
+    # If it's numeric, assume it's already a broadcaster ID
+    # Otherwise, try to convert it
+    channel_id = request.channel
+    if (
+        not request.channel.isdigit()
+        and eventsub_client
+        and eventsub_client.http_client
+    ):
+        try:
+            broadcaster_id = await eventsub_client._get_broadcaster_id(request.channel)
+            if broadcaster_id:
+                channel_id = broadcaster_id
+        except Exception:
+            # Fallback to original value if conversion fails
+            pass
+
     try:
         result = await rag_service.answer(
-            channel_id=request.channel,
+            channel_id=channel_id,
             question=request.question,
             top_k=request.top_k,
             half_life_minutes=request.half_life_minutes,
@@ -374,6 +437,37 @@ async def rag_answer(request: RAGQueryRequest):
         raise HTTPException(status_code=500, detail="Failed to generate answer")
 
     return RAGAnswerResponse(**result)
+
+
+@app.get("/api/get-broadcaster-id")
+async def get_broadcaster_id(channel_name: str):
+    """
+    Get broadcaster user ID from channel name.
+
+    This endpoint helps standardize channel identifiers across the system.
+    All tables use broadcaster ID instead of channel names for consistency.
+
+    Args:
+        channel_name: Twitch channel name (e.g., "jynxzi")
+
+    Returns:
+        JSON with broadcaster_id
+    """
+    if not eventsub_client or not eventsub_client.http_client:
+        raise HTTPException(status_code=503, detail="EventSub client not available")
+
+    try:
+        broadcaster_id = await eventsub_client._get_broadcaster_id(channel_name)
+        if not broadcaster_id:
+            raise HTTPException(
+                status_code=404, detail=f"Channel not found: {channel_name}"
+            )
+        return {"broadcaster_id": broadcaster_id, "channel_name": channel_name}
+    except Exception as exc:
+        logger.error(f"Failed to get broadcaster ID: {exc}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get broadcaster ID: {str(exc)}"
+        ) from exc
 
 
 @app.get("/api/get-audio-stream-url", response_model=AudioStreamUrlResponse)
@@ -643,6 +737,7 @@ async def startup_event():
     - Database connection pooling
     - Loading ML models
     - Initializing caches
+    - Starting EventSub WebSocket connection
     """
     logger.info(f"Percepta Python service starting on {settings.host}:{settings.port}")
 
@@ -655,6 +750,24 @@ async def startup_event():
         except Exception as exc:
             logger.warning(f"Failed to preload Whisper model: {exc}")
 
+    # Start EventSub WebSocket connection
+    global eventsub_client
+    if eventsub_client:
+        try:
+            await eventsub_client.connect()
+            logger.info("EventSub WebSocket connection started")
+        except Exception as exc:
+            logger.error(f"Failed to start EventSub connection: {exc}")
+
+    # Start metadata polling
+    global metadata_poller
+    if metadata_poller:
+        try:
+            await metadata_poller.start()
+            logger.info("Metadata polling started")
+        except Exception as exc:
+            logger.error(f"Failed to start metadata polling: {exc}")
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -665,18 +778,27 @@ async def shutdown_event():
     - Closing database connections
     - Saving state
     - Cleanup
-
-    TASK: Log shutdown message
-    - Log at INFO level
-    - Message: "Percepta Python service shutting down"
-
-    LEARNING NOTE: Graceful shutdown
-    - Clean up resources
-    - Finish pending requests
-    - Like the shutdown() function in Node index.js
+    - Closing EventSub WebSocket connection
     """
-
     logger.info("Percepta Python service shutting down")
+
+    # Stop metadata polling
+    global metadata_poller
+    if metadata_poller:
+        try:
+            await metadata_poller.stop()
+            logger.info("Metadata polling stopped")
+        except Exception as exc:
+            logger.error(f"Error stopping metadata polling: {exc}")
+
+    # Close EventSub WebSocket connection
+    global eventsub_client
+    if eventsub_client:
+        try:
+            await eventsub_client.disconnect()
+            logger.info("EventSub WebSocket connection closed")
+        except Exception as exc:
+            logger.error(f"Error closing EventSub connection: {exc}")
 
 
 """

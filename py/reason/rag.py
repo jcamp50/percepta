@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 import time
 from dataclasses import dataclass
@@ -193,11 +194,12 @@ class RAGService:
             )
         return citations
 
-    def _build_messages(
+    async def _build_messages(
         self,
         *,
         question: str,
         formatted_context: Sequence[str],
+        channel_id: Optional[str] = None,
     ) -> List[dict]:
         context_section = (
             "\n".join(formatted_context) if formatted_context else "(no context)"
@@ -208,10 +210,74 @@ class RAGService:
             question=question,
         )
 
+        # Fetch latest channel metadata and format system prompt
+        system_prompt = await self._format_system_prompt_with_metadata(
+            channel_id=channel_id
+        )
+
         return [
-            {"role": "system", "content": self._system_prompt},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
+
+    async def _format_system_prompt_with_metadata(
+        self, channel_id: Optional[str] = None
+    ) -> str:
+        """Format system prompt with current channel metadata."""
+        if not channel_id or not self.vector_store:
+            # No metadata available, use base prompt
+            return self._system_prompt
+
+        try:
+            snapshot = await self.vector_store.get_latest_channel_snapshot(channel_id)
+            if not snapshot:
+                return self._system_prompt
+
+            # Extract metadata
+            payload = snapshot.get("payload_json") or {}
+            streamer_name = payload.get("channel_name", "the streamer")
+            game_name = snapshot.get("game_name") or payload.get("game_name")
+            viewer_count = snapshot.get("viewer_count") or payload.get("viewer_count")
+            title = snapshot.get("title") or payload.get("title")
+            is_live = payload.get("is_live", False)
+
+            # Build stream context string
+            context_parts = []
+            if is_live:
+                if game_name:
+                    context_parts.append(
+                        f"Currently livestreaming in the {game_name} category"
+                    )
+                if viewer_count is not None:
+                    context_parts.append(f"with {viewer_count:,} viewers")
+                if title:
+                    context_parts.append(f'Stream title: "{title}"')
+            else:
+                context_parts.append("Currently offline")
+                if game_name:
+                    context_parts.append(f"Last category: {game_name}")
+                if title:
+                    context_parts.append(f'Last title: "{title}"')
+
+            stream_context = ""
+            if context_parts:
+                stream_context = " " + ". ".join(context_parts) + "."
+
+            # Format system prompt with metadata
+            try:
+                return self._system_prompt.format(
+                    streamer_name=streamer_name,
+                    stream_context=stream_context,
+                )
+            except KeyError:
+                # Template doesn't have placeholders, append metadata
+                return f"{self._system_prompt}\n\nStream context:{stream_context}"
+
+        except Exception as e:
+            # Log error but don't fail - fall back to base prompt
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to fetch metadata for system prompt: {e}")
+            return self._system_prompt
 
     @staticmethod
     def _project_root() -> Path:
@@ -303,8 +369,8 @@ class RAGService:
         if not chunks:
             fallback = "I don't have enough context to answer that right now."
             # Build prompts for consistency with response schema
-            messages = self._build_messages(
-                question=cleaned_question, formatted_context=[]
+            messages = await self._build_messages(
+                question=cleaned_question, formatted_context=[], channel_id=channel_id
             )
             system_prompt = messages[0]["content"]
             user_prompt_text = messages[1]["content"]
@@ -324,8 +390,8 @@ class RAGService:
         if not selected_chunks:
             fallback = "I don't have enough context to answer that right now."
             # Build prompts even when no chunks selected
-            messages = self._build_messages(
-                question=cleaned_question, formatted_context=[]
+            messages = await self._build_messages(
+                question=cleaned_question, formatted_context=[], channel_id=channel_id
             )
             system_prompt = messages[0]["content"]
             user_prompt_text = messages[1]["content"]
@@ -340,8 +406,10 @@ class RAGService:
                 },
             }
 
-        messages = self._build_messages(
-            question=cleaned_question, formatted_context=formatted_context
+        messages = await self._build_messages(
+            question=cleaned_question,
+            formatted_context=formatted_context,
+            channel_id=channel_id,
         )
         system_prompt = messages[0]["content"]
         user_prompt_text = messages[1]["content"]

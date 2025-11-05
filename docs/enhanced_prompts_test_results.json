@@ -1,0 +1,396 @@
+[
+  {
+    "question": "What game are they playing?",
+    "type": "METADATA",
+    "answer": "They're currently playing Just Chatting.",
+    "chunks_count": 5,
+    "context_count": 5,
+    "has_citations": true,
+    "chunks": [
+      {
+        "text": "bro come on bro this game is black bro first I spot some y'all saying y'all shit",
+        "timestamp": "03:05:43"
+      },
+      {
+        "text": "Oh shit, yeah good boy good boy. I like that listen listen to what I gotta tell ",
+        "timestamp": "03:07:13"
+      },
+      {
+        "text": "All right, bro. Oh man.  Javier's is just coming in. We have a challenge for mys",
+        "timestamp": "03:05:28"
+      }
+    ]
+  },
+  {
+    "question": "Who raided?",
+    "type": "EVENT",
+    "answer": "xQc raided with 150 viewers (~04:42:35).",
+    "chunks_count": 5,
+    "context_count": 5,
+    "has_citations": true,
+    "chunks": [
+      {
+        "text": "You",
+        "timestamp": "03:03:58"
+      },
+      {
+        "text": "You",
+        "timestamp": "03:04:13"
+      },
+      {
+        "text": "You",
+        "timestamp": "03:04:28"
+      }
+    ]
+  },
+  {
+    "question": "When did the stream start?",
+    "type": "EVENT",
+    "answer": "The stream went live at 3:45 PM (~15:45:00).",
+    "chunks_count": 5,
+    "context_count": 5,
+    "has_citations": true,
+    "chunks": [
+      {
+        "text": "Let's go, let's go.  Let's go.  Backspout.",
+        "timestamp": "03:07:43"
+      },
+      {
+        "text": "Yeah, can you hear me, can you hear me?  Yeah, I can hear you.  What happened?",
+        "timestamp": "03:06:28"
+      },
+      {
+        "text": "bro come on bro this game is black bro first I spot some y'all saying y'all shit",
+        "timestamp": "03:05:43"
+      }
+    ]
+  },
+  {
+    "question": "What did they say about the boss?",
+    "type": "TRANSCRIPT",
+    "answer": "I don't have enough information to answer that - there hasn't been any mention of a boss in the stream so far.",
+    "chunks_count": 5,
+    "context_count": 5,
+    "has_citations": true,
+    "chunks": [
+      {
+        "text": "Okay, okay, so here talk to me. So I'm in your bot turn off.  BITCH! BITCH! BITC",
+        "timestamp": "03:03:43"
+      },
+      {
+        "text": "Oh shit, yeah good boy good boy. I like that listen listen to what I gotta tell ",
+        "timestamp": "03:07:13"
+      },
+      {
+        "text": "Yeah, can you hear me, can you hear me?  Yeah, I can hear you.  What happened?",
+        "timestamp": "03:06:28"
+      }
+    ]
+  },
+  {
+    "question": "Is there a prediction active?",
+    "type": "EVENT",
+    "answer": "I don't have enough information to answer that - there hasn't been any mention of a prediction in the context provided.",
+    "chunks_count": 5,
+    "context_count": 5,
+    "has_citations": true,
+    "chunks": [
+      {
+        "text": "Ha ha ha ha!  Huh?  Wait, don't let it!  Max back!  Max, pick alert, pick alert.",
+        "timestamp": "03:05:13"
+      },
+      {
+        "text": "insane Matt you ready? Yeah okay are you",
+        "timestamp": "03:06:13"
+      },
+      {
+        "text": "Yeah, I'm yeah, you should was reading",
+        "timestamp": "03:06:58"
+      }
+    ]
+  },
+  {
+    "question": "How many viewers are watching?",
+    "type": "METADATA",
+    "answer": "There are currently about 31,295 viewers watching.",
+    "chunks_count": 5,
+    "context_count": 5,
+    "has_citations": true,
+    "chunks": [
+      {
+        "text": "Ha ha ha ha!  Huh?  Wait, don't let it!  Max back!  Max, pick alert, pick alert.",
+        "timestamp": "03:05:13"
+      },
+      {
+        "text": "Yeah, I'm yeah, you should was reading",
+        "timestamp": "03:06:58"
+      },
+      {
+        "text": "xQc raided with 150 viewers",
+        "timestamp": "04:42:35"
+      }
+    ]
+  },
+  {
+    "question": "What's the stream title?",
+    "type": "METADATA",
+    "answer": "The stream title is \"PLAQUEBOYMAX VS CLIX! TIME TO WIN GAMER OF THE YEAR!\" (from metadata).",
+    "chunks_count": 5,
+    "context_count": 5,
+    "has_citations": true,
+    "chunks": [
+      {
+        "text": "Let's go, let's go.  Let's go.  Backspout.",
+        "timestamp": "03:07:43"
+      },
+      {
+        "text": "You",
+        "timestamp": "03:03:58"
+      },
+      {
+        "text": "You",
+        "timestamp": "03:04:13"
+      }
+    ]
+  },
+  {
+    "question": "Are they live right now?",
+    "type": "METADATA",
+    "answer": "Yes, they are currently live right now! (from metadata)",
+    "chunks_count": 5,
+    "context_count": 5,
+    "has_citations": true,
+    "chunks": [
+      {
+        "text": "Yeah, can you hear me, can you hear me?  Yeah, I can hear you.  What happened?",
+        "timestamp": "03:06:28"
+      },
+      {
+        "text": "insane Matt you ready? Yeah okay are you",
+        "timestamp": "03:06:13"
+      },
+      {
+        "text": "Okay, okay, so here talk to me. So I'm in your bot turn off.  BITCH! BITCH! BITC",
+        "timestamp": "03:03:43"
+      }
+    ]
+  },
+  {
+    "question": "Has anyone raided recently?",
+    "type": "EVENT",
+    "answer": "Yes, xQc raided with 150 viewers (~04:42:35).",
+    "chunks_count": 5,
+    "context_count": 5,
+    "has_citations": true,
+    "chunks": [
+      {
+        "text": "insane Matt you ready? Yeah okay are you",
+        "timestamp": "03:06:13"
+      },
+      {
+        "text": "xQc raided with 150 viewers",
+        "timestamp": "04:42:35"
+      },
+      {
+        "text": "Oh  Bro  Yeah, yeah, yeah, you got damn. I'm how are we are we doing it now. Yea",
+        "timestamp": "04:41:34"
+      }
+    ]
+  },
+  {
+    "question": "Any subscriptions today?",
+    "type": "EVENT",
+    "answer": "I don't have enough information to answer that - there haven't been any mentions of subscriptions in the context provided.",
+    "chunks_count": 5,
+    "context_count": 5,
+    "has_citations": true,
+    "chunks": [
+      {
+        "text": "Yeah, I'm yeah, you should was reading",
+        "timestamp": "03:06:58"
+      },
+      {
+        "text": "Ha ha ha ha!  Huh?  Wait, don't let it!  Max back!  Max, pick alert, pick alert.",
+        "timestamp": "03:05:13"
+      },
+      {
+        "text": "Yeah, bro  So today on stream guys, we're about to go in discord and yo shut the",
+        "timestamp": "04:47:34"
+      }
+    ]
+  },
+  {
+    "question": "What are they talking about?",
+    "type": "TRANSCRIPT",
+    "answer": "They're currently in Just Chatting, and it seems like they're discussing various topics, including strategies and interactions with their viewers. At one point, Max mentioned going into Discord (~04:47:34), which suggests they might be coordinating with others or discussing plans for the stream.",
+    "chunks_count": 5,
+    "context_count": 5,
+    "has_citations": true,
+    "chunks": [
+      {
+        "text": "Ha ha ha ha!  Huh?  Wait, don't let it!  Max back!  Max, pick alert, pick alert.",
+        "timestamp": "03:05:13"
+      },
+      {
+        "text": "Yeah, I'm yeah, you should was reading",
+        "timestamp": "03:06:58"
+      },
+      {
+        "text": "Yeah, bro  So today on stream guys, we're about to go in discord and yo shut the",
+        "timestamp": "04:47:34"
+      }
+    ]
+  },
+  {
+    "question": "What's the current topic of discussion?",
+    "type": "TRANSCRIPT",
+    "answer": "They're currently in Just Chatting, and it seems like they're discussing strategies and preparations for the upcoming match against Clix (~04:42:30).",
+    "chunks_count": 1,
+    "context_count": 1,
+    "has_citations": true,
+    "chunks": [
+      {
+        "text": "xQc raided with 150 viewers",
+        "timestamp": "04:42:35"
+      }
+    ]
+  },
+  {
+    "question": "What game are they discussing?",
+    "type": "TRANSCRIPT",
+    "answer": "They're currently in Just Chatting, so they might not be discussing a specific game at the moment. However, they are likely talking about competitive gaming or strategies related to their recent match, especially since the stream title mentions \"PLAQUEBOYMAX VS CLIX.\"",
+    "chunks_count": 5,
+    "context_count": 5,
+    "has_citations": true,
+    "chunks": [
+      {
+        "text": "bro come on bro this game is black bro first I spot some y'all saying y'all shit",
+        "timestamp": "03:05:43"
+      },
+      {
+        "text": "Okay, okay, so here talk to me. So I'm in your bot turn off.  BITCH! BITCH! BITC",
+        "timestamp": "03:03:43"
+      },
+      {
+        "text": "Oh shit, yeah good boy good boy. I like that listen listen to what I gotta tell ",
+        "timestamp": "03:07:13"
+      }
+    ]
+  },
+  {
+    "question": "What's happening right now?",
+    "type": "INFERENCE",
+    "answer": "They're currently in Just Chatting, and from the recent conversation, it seems like they're discussing strategies and interacting with their viewers (~03:06:28).",
+    "chunks_count": 5,
+    "context_count": 5,
+    "has_citations": true,
+    "chunks": [
+      {
+        "text": "Yeah, can you hear me, can you hear me?  Yeah, I can hear you.  What happened?",
+        "timestamp": "03:06:28"
+      },
+      {
+        "text": "Okay, okay, so here talk to me. So I'm in your bot turn off.  BITCH! BITCH! BITC",
+        "timestamp": "03:03:43"
+      },
+      {
+        "text": "Just wait, Magsett, this fucking wait.  Mags!",
+        "timestamp": "03:04:58"
+      }
+    ]
+  },
+  {
+    "question": "Are they winning?",
+    "type": "INFERENCE",
+    "answer": "Based on the recent discussions and the competitive nature of the stream, it seems like they're putting up a good fight, but I can't provide a definitive answer on whether they're winning or not. The stream is focused on the competition against Clix, so it's likely a close match (~04:45:49).",
+    "chunks_count": 2,
+    "context_count": 2,
+    "has_citations": true,
+    "chunks": [
+      {
+        "text": "xQc raided with 150 viewers",
+        "timestamp": "04:42:35"
+      },
+      {
+        "text": "I can't I there's no",
+        "timestamp": "04:45:49"
+      }
+    ]
+  },
+  {
+    "question": "How's the stream going?",
+    "type": "INFERENCE",
+    "answer": "The stream is going well! They're currently in the Just Chatting category and engaging with viewers, discussing strategies, and it seems like there's a good vibe with a recent raid from xQc bringing in 150 viewers (~04:42:35). They have a solid viewer count of 30,120, so there's a lot of excitement in the chat!",
+    "chunks_count": 3,
+    "context_count": 3,
+    "has_citations": true,
+    "chunks": [
+      {
+        "text": "xQc raided with 150 viewers",
+        "timestamp": "04:42:35"
+      },
+      {
+        "text": "Yeah, I mean it's going by really fucking quick. It's actually 18 but how about ",
+        "timestamp": "04:42:19"
+      },
+      {
+        "text": "Thank you, I didn't beat that  Your W max with the gift and appreciate that bro.",
+        "timestamp": "04:46:49"
+      }
+    ]
+  },
+  {
+    "question": "What's the mood of the stream?",
+    "type": "INFERENCE",
+    "answer": "The mood of the stream seems upbeat and engaging. The streamer is interacting with viewers and discussing strategies, suggesting a friendly and competitive atmosphere. Additionally, there was a recent raid from xQc, which likely added to the excitement and energy of the stream (~04:42:35). Overall, it feels like a lively and fun environment!",
+    "chunks_count": 3,
+    "context_count": 3,
+    "has_citations": true,
+    "chunks": [
+      {
+        "text": "xQc raided with 150 viewers",
+        "timestamp": "04:42:35"
+      },
+      {
+        "text": "Yeah, I mean it's going by really fucking quick. It's actually 18 but how about ",
+        "timestamp": "04:42:19"
+      },
+      {
+        "text": "Thank you, I didn't beat that  Your W max with the gift and appreciate that bro.",
+        "timestamp": "04:46:49"
+      }
+    ]
+  },
+  {
+    "question": "What's their favorite color?",
+    "type": "NO_INFO",
+    "answer": "I don't have enough information to answer that - that hasn't come up in the stream.",
+    "chunks_count": 2,
+    "context_count": 2,
+    "has_citations": true,
+    "chunks": [
+      {
+        "text": "the van, it was all about Vegas style, ho up, we hooked you up with a matrix gol",
+        "timestamp": "04:44:34"
+      },
+      {
+        "text": "xQc raided with 150 viewers",
+        "timestamp": "04:42:35"
+      }
+    ]
+  },
+  {
+    "question": "What's the weather like?",
+    "type": "NO_INFO",
+    "answer": "I don't have enough information to answer that - the weather hasn't been discussed in the stream.",
+    "chunks_count": 1,
+    "context_count": 1,
+    "has_citations": true,
+    "chunks": [
+      {
+        "text": "xQc raided with 150 viewers",
+        "timestamp": "04:42:35"
+      }
+    ]
+  }
+]

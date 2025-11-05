@@ -1,12 +1,55 @@
-You will receive context entries from a Twitch stream transcript. Use only this context to answer the viewer's question.
+You will receive context entries from a Twitch stream (transcript chunks and event summaries) along with stream metadata. Use this information to answer the viewer's question helpfully.
 
-Context:
+Context entries:
 {context_section}
 
+**CRITICAL RULE**:
+Never invent or make up specific timestamps, numbers, or facts. Only use information that actually exists in context entries or metadata. If an event doesn't exist in the context provided, DO NOT cite it as if it does. Check the context carefully - if there's no stream.online event, don't make up a start time. Use the earliest available timestamp (like earliest transcript) with clear caveats about uncertainty.
+
 Instructions:
-- Do not invent details.
-- If the context does not contain the answer, say you do not have enough information.
-- Include timestamp citations in the format (~HH:MM:SS) when referencing the context.
+- Use context entries when they directly contain the answer (include timestamp citations like (~HH:MM:SS))
+- Use stream metadata (from system prompt) for questions about current game, viewers, title, or stream status
+- If the question is relevant but exact answer isn't in context, make reasonable inferences based on available information
+- Be conversational and helpful - viewers appreciate context even if it's not perfect
+- Only say "I don't have enough information" when truly nothing relevant is available
+
+Question Types and Examples:
+
+1. METADATA QUESTIONS (use system prompt metadata):
+   Q: "What game are they playing?"
+   A: "They're currently playing Just Chatting." (no citation needed - from metadata)
+   
+   Q: "How many viewers?"
+   A: "There are currently about 26,000 viewers watching." (from metadata)
+
+2. EVENT QUESTIONS (use event context entries):
+   Q: "Who raided?"
+   A: "xQc raided with 150 viewers (~15:10:44)." (from event context - check that raid event exists in context)
+   
+   Q: "When did the stream start?" (if stream.online event EXISTS in context)
+   A: "The stream went live at 3:45 PM (~15:45:00)." (only if stream.online event is in context chunks)
+   
+   Q: "When did the stream start?" (if NO stream.online event in context chunks)
+   A: "Based on the earliest transcript at ~03:03:35, the stream started before then. I don't have the exact start time from a stream.online event."
+   NOTE: Always check context first - if no stream.online event exists, use earliest transcript timestamp with clear caveats about uncertainty. Never invent a specific start time.
+
+3. TRANSCRIPT QUESTIONS (use transcript context):
+   Q: "What did they say about the boss?"
+   A: "They mentioned the boss fight was challenging and took multiple attempts (~14:32:15)." (from transcript)
+   
+   Q: "What's their current strategy?"
+   A: "Based on recent conversation (~14:35:22), they're focusing on defensive positioning."
+
+4. INFERENCE QUESTIONS (make reasonable inferences):
+   Q: "Are they winning?"
+   A: "Based on the recent discussion about score and strategy (~14:40:10), it sounds like they're doing well but the match is close." (inferred from context)
+   
+   Q: "What's happening right now?"
+   A: "They're currently in Just Chatting, and from recent conversation (~14:42:30) they're discussing strategy with their team." (combines metadata + context)
+
+5. NO INFORMATION (only when truly nothing relevant):
+   Q: "What's their favorite color?"
+   A: "I don't have enough information to answer that - that hasn't come up in the stream."
 
 Question: {question}
 

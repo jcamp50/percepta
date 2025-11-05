@@ -1,0 +1,45 @@
+﻿{
+    "answer":  "The stream went live at 3:45 PM (~15:45:00).",
+    "citations":  [
+                      {
+                          "id":  "76d42cd3-bb5e-4752-9fbd-ed024ab9bd2a",
+                          "timestamp":  "(~04:42:35)"
+                      },
+                      {
+                          "id":  "d7cea225-8bbf-46b9-b8ed-2ebfd40dca61",
+                          "timestamp":  "(~04:45:49)"
+                      }
+                  ],
+    "chunks":  [
+                   {
+                       "id":  "76d42cd3-bb5e-4752-9fbd-ed024ab9bd2a",
+                       "channel_id":  "672238954",
+                       "started_at":  "2025-11-04T04:42:35.024549Z",
+                       "ended_at":  "2025-11-04T04:42:35.024549Z",
+                       "midpoint":  "2025-11-04T04:42:35.024549Z",
+                       "timestamp":  "04:42:35",
+                       "text":  "xQc raided with 150 viewers",
+                       "score":  0.5259631144084053,
+                       "cosine_distance":  0.700273409526557
+                   },
+                   {
+                       "id":  "d7cea225-8bbf-46b9-b8ed-2ebfd40dca61",
+                       "channel_id":  "672238954",
+                       "started_at":  "2025-11-04T04:45:41.603000Z",
+                       "ended_at":  "2025-11-04T04:45:56.603000Z",
+                       "midpoint":  "2025-11-04T04:45:49.103000Z",
+                       "timestamp":  "04:45:49",
+                       "text":  "I can\u0027t I there\u0027s no",
+                       "score":  0.7438801370052085,
+                       "cosine_distance":  0.9527071476789458
+                   }
+               ],
+    "context":  [
+                    "[04:42:35] xQc raided with 150 viewers",
+                    "[04:45:49] I can\u0027t I there\u0027s no"
+                ],
+    "prompts":  {
+                    "system":  "You are a helpful Twitch chat assistant for streamer plaqueboymax. Currently livestreaming in the Just Chatting category. with 30,120 viewers. Stream title: \"PLAQUEBOYMAX VS CLIX! TIME TO WIN GAMER OF THE YEAR!\".\n\nYour goal is to provide accurate, helpful answers to viewer questions about the stream.\n\nYou have access to:\n1. Context entries: Timestamped transcript chunks and event summaries from the stream\n2. Stream metadata: Current game/category, viewer count, stream title, live status (provided in this system prompt)\n\nWhen answering:\n- Prefer information from context entries when available (include timestamp citations)\n- You MAY use stream metadata from the system prompt for questions about current game, viewer count, stream status, or title\n- If a question is relevant to the stream but the exact answer isn\u0027t in context, you may make reasonable inferences based on available information\n- Only say \"I don\u0027t have enough information\" when the question truly cannot be answered with available context or metadata",
+                    "user":  "You will receive context entries from a Twitch stream (transcript chunks and event summaries) along with stream metadata. Use this information to answer the viewer\u0027s question helpfully.\n\nContext entries:\n[04:42:35] xQc raided with 150 viewers\n[04:45:49] I can\u0027t I there\u0027s no\n\nInstructions:\n- Use context entries when they directly contain the answer (include timestamp citations like (~HH:MM:SS))\n- Use stream metadata (from system prompt) for questions about current game, viewers, title, or stream status\n- If the question is relevant but exact answer isn\u0027t in context, make reasonable inferences based on available information\n- Be conversational and helpful - viewers appreciate context even if it\u0027s not perfect\n- Only say \"I don\u0027t have enough information\" when truly nothing relevant is available\n\nQuestion Types and Examples:\n\n1. METADATA QUESTIONS (use system prompt metadata):\n   Q: \"What game are they playing?\"\n   A: \"They\u0027re currently playing Just Chatting.\" (no citation needed - from metadata)\n   \n   Q: \"How many viewers?\"\n   A: \"There are currently about 26,000 viewers watching.\" (from metadata)\n\n2. EVENT QUESTIONS (use event context entries):\n   Q: \"Who raided?\"\n   A: \"xQc raided with 150 viewers (~15:10:44).\" (from event context)\n   \n   Q: \"When did the stream start?\"\n   A: \"The stream went live at 3:45 PM (~15:45:00).\" (from stream.online event)\n\n3. TRANSCRIPT QUESTIONS (use transcript context):\n   Q: \"What did they say about the boss?\"\n   A: \"They mentioned the boss fight was challenging and took multiple attempts (~14:32:15).\" (from transcript)\n   \n   Q: \"What\u0027s their current strategy?\"\n   A: \"Based on recent conversation (~14:35:22), they\u0027re focusing on defensive positioning.\"\n\n4. INFERENCE QUESTIONS (make reasonable inferences):\n   Q: \"Are they winning?\"\n   A: \"Based on the recent discussion about score and strategy (~14:40:10), it sounds like they\u0027re doing well but the match is close.\" (inferred from context)\n   \n   Q: \"What\u0027s happening right now?\"\n   A: \"They\u0027re currently in Just Chatting, and from recent conversation (~14:42:30) they\u0027re discussing strategy with their team.\" (combines metadata + context)\n\n5. NO INFORMATION (only when truly nothing relevant):\n   Q: \"What\u0027s their favorite color?\"\n   A: \"I don\u0027t have enough information to answer that - that hasn\u0027t come up in the stream.\"\n\nQuestion: When did the stream start?\n\nAnswer:"
+                }
+}

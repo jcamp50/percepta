@@ -48,6 +48,7 @@ class AudioCapture {
     this.ffmpegProcess = null;
     this.streamMonitorInterval = null;
     this.currentChunkStartTime = null;
+    this.broadcasterId = null; // Will be set when capture starts
   }
 
   /**
@@ -690,8 +691,9 @@ class AudioCapture {
           processedChunks.add(chunkKey);
 
           // Send to Python service
+          // Use broadcaster ID instead of channel name for consistency
           await this._sendChunkToPython(chunkBuffer, {
-            channel_id: channelId,
+            channel_id: this.broadcasterId || channelId, // Fallback to channel name if broadcaster ID not available
             started_at: chunkStartTime.toISOString(),
             ended_at: chunkEndTime.toISOString(),
           });
@@ -762,6 +764,78 @@ class AudioCapture {
   }
 
   /**
+   * Get broadcaster ID from channel name
+   * Retries with exponential backoff to handle Python service startup race condition
+   * @param {string} channelName - Channel name (without #)
+   * @param {number} maxRetries - Maximum number of retry attempts (default: 5)
+   * @returns {Promise<string|null>} Broadcaster ID or null if not found
+   */
+  async _getBroadcasterId(channelName, maxRetries = 5) {
+    const baseDelay = 1000; // Start with 1 second delay
+    const maxDelay = 10000; // Cap at 10 seconds
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const response = await axios.get(
+          `${this.pythonServiceUrl}/api/get-broadcaster-id`,
+          {
+            params: {
+              channel_name: channelName,
+            },
+            timeout: 5000,
+          }
+        );
+        if (attempt > 0) {
+          logger.info(
+            `Successfully got broadcaster ID for ${channelName} after ${attempt} retry(ies)`
+          );
+        }
+        return response.data.broadcaster_id || null;
+      } catch (error) {
+        // Check if this is a connection error (service not ready) vs API error (channel not found)
+        const isConnectionError =
+          error.code === 'ECONNREFUSED' ||
+          error.code === 'ETIMEDOUT' ||
+          error.message.includes('Network Error') ||
+          (error.response && error.response.status >= 500);
+
+        // If it's not a connection error, don't retry (e.g., 404 = channel not found)
+        if (!isConnectionError) {
+          logger.error(
+            `Failed to get broadcaster ID for ${channelName}: ${error.message}`
+          );
+          return null;
+        }
+
+        // If we've exhausted retries, give up
+        if (attempt >= maxRetries) {
+          logger.error(
+            `Failed to get broadcaster ID for ${channelName} after ${maxRetries} retries: ${error.message}`
+          );
+          return null;
+        }
+
+        // Calculate exponential backoff delay with jitter
+        const delay = Math.min(
+          baseDelay * Math.pow(2, attempt) + Math.random() * 1000,
+          maxDelay
+        );
+
+        logger.warn(
+          `Python service not ready yet, retrying broadcaster ID lookup for ${channelName} in ${Math.round(
+            delay
+          )}ms (attempt ${attempt + 1}/${maxRetries})...`
+        );
+
+        // Wait before retrying
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * Start capturing audio from Twitch stream
    * @param {string} channelId - Channel name (without #)
    */
@@ -770,6 +844,17 @@ class AudioCapture {
       logger.warn(`Audio capture already running for ${channelId}`);
       return;
     }
+
+    // Get broadcaster ID for this channel
+    this.broadcasterId = await this._getBroadcasterId(channelId);
+    if (!this.broadcasterId) {
+      const errMsg = `Failed to get broadcaster ID for ${channelId}, cannot start capture`;
+      logger.error(errMsg);
+      throw new Error(errMsg);
+    }
+    logger.info(
+      `Resolved channel ${channelId} to broadcaster ID: ${this.broadcasterId}`
+    );
 
     // Get HLS URL
     const hlsUrl = await this._getHlsUrl(channelId);
