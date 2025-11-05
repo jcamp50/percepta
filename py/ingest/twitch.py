@@ -158,6 +158,7 @@ class EventSubWebSocketClient:
             try:
                 await self.reconnect_task
             except asyncio.CancelledError:
+                # Task cancellation is expected when disconnecting; ignore this exception.
                 pass
             self.reconnect_task = None
 
@@ -170,7 +171,8 @@ class EventSubWebSocketClient:
             self.ws = None
 
         # Close HTTP client
-        await self.http_client.aclose()
+        if self.http_client:
+            await self.http_client.aclose()
 
         logger.info("Disconnected from EventSub WebSocket")
 
@@ -267,8 +269,8 @@ class EventSubWebSocketClient:
             if self.ws:
                 try:
                     await self.ws.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.error(f"Error closing websocket during reconnect: {e}")
 
             # Reconnect to new URL
             try:
