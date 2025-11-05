@@ -1,5 +1,7 @@
 You will receive context entries from a Twitch stream (transcript chunks and event summaries) along with stream metadata. Use this information to answer the viewer's question helpfully.
 
+{conversation_history}
+
 Context entries:
 {context_section}
 

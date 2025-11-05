@@ -17,7 +17,7 @@ Why FastAPI?
 from fastapi import FastAPI, HTTPException, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, List
 import logging
 import time
 import uuid
@@ -43,6 +43,7 @@ from py.memory.vector_store import VectorStore
 from py.memory.redis_session import RedisSessionManager
 from py.utils.embeddings import embed_text
 from py.utils.logging import get_logger
+from py.utils.content_filter import is_safe_for_chat, filter_response_content
 
 # Configure logging
 # TASK: Set up Python logging
@@ -138,6 +139,16 @@ app.add_middleware(
 # Each item: {"channel": str, "message": str, "reply_to": Optional[str]}
 message_queue = []
 
+# Bot state management
+bot_paused = False  # Global bot paused state
+
+# Parse admin users from config
+admin_users_list: List[str] = []
+if settings.admin_users:
+    admin_users_list = [
+        user.strip().lower() for user in settings.admin_users.split(",") if user.strip()
+    ]
+
 try:
     rag_service: Optional[RAGService] = RAGService()
 except ValueError as exc:
@@ -169,6 +180,9 @@ try:
         redis_url=f"redis://{settings.redis_host}:{settings.redis_port}/{settings.redis_db}",
         session_expiry_minutes=settings.session_expiry_minutes,
         max_history=settings.max_session_history,
+        global_rate_limit_msgs=settings.global_rate_limit_msgs,
+        global_rate_limit_window=settings.global_rate_limit_window,
+        repeated_question_cooldown=settings.repeated_question_cooldown,
     )
     logger.info("Redis session manager initialized")
 except Exception as exc:
@@ -238,6 +252,45 @@ async def health_check():
     }
 
 
+def is_admin_user(username: str) -> bool:
+    """Check if user is an admin."""
+    return username.lower() in admin_users_list
+
+
+async def handle_admin_command(message: ChatMessage) -> Optional[str]:
+    """
+    Handle admin commands (!pause, !resume, !status).
+
+    Args:
+        message: Chat message containing command
+
+    Returns:
+        Response message if command was processed, None otherwise
+    """
+    global bot_paused
+
+    if not is_admin_user(message.username):
+        return None
+
+    msg_lower = message.message.lower().strip()
+
+    if msg_lower == "!pause":
+        bot_paused = True
+        logger.info(f"Bot paused by admin {message.username}")
+        return "Bot paused. Use !resume to resume."
+
+    elif msg_lower == "!resume":
+        bot_paused = False
+        logger.info(f"Bot resumed by admin {message.username}")
+        return "Bot resumed."
+
+    elif msg_lower == "!status":
+        status = "paused" if bot_paused else "active"
+        return f"Bot status: {status}"
+
+    return None
+
+
 @app.post("/chat/message", response_model=MessageReceived)
 async def receive_message(message: ChatMessage):
     """
@@ -273,7 +326,86 @@ async def receive_message(message: ChatMessage):
         chat_logger.debug(
             f"Received @mention from {message.username} in #{message.channel}: {message.message}"
         )
-    # Otherwise, silently process (chat I/O is working, focus on audio transcription)
+
+    # Check for admin commands first (!pause, !resume, !status)
+    admin_response = await handle_admin_command(message)
+    if admin_response:
+        message_queue.append(
+            {
+                "channel": message.channel,
+                "message": admin_response,
+                "reply_to": message.username,
+            }
+        )
+        return MessageReceived(
+            received=True,
+            message_id=str(uuid.uuid4()),
+            timestamp=datetime.now(),
+        )
+
+    # Check if bot is paused
+    global bot_paused
+    if bot_paused:
+        # Skip processing if bot is paused (except admin commands)
+        return MessageReceived(
+            received=True,
+            message_id=str(uuid.uuid4()),
+            timestamp=datetime.now(),
+        )
+
+    # Check for !more command
+    msg_stripped = message.message.strip().lower()
+    if msg_stripped.startswith("!more"):
+        if session_manager:
+            # Parse answer ID from command (!more <answer_id>)
+            parts = msg_stripped.split()
+            if len(parts) >= 2:
+                answer_id_prefix = parts[1]
+                # Get full answer ID from prefix mapping
+                full_answer_id = await session_manager.get_answer_id_from_prefix(
+                    message.channel, message.username, answer_id_prefix
+                )
+
+                if full_answer_id:
+                    # Retrieve full answer using full UUID
+                    full_answer = await session_manager.get_long_answer(full_answer_id)
+                    if full_answer:
+                        # Found the answer, send it
+                        message_queue.append(
+                            {
+                                "channel": message.channel,
+                                "message": full_answer,
+                                "reply_to": message.username,
+                            }
+                        )
+                        chat_logger.info(
+                            f"Sent full answer via !more for {message.username}"
+                        )
+                        return MessageReceived(
+                            received=True,
+                            message_id=str(uuid.uuid4()),
+                            timestamp=datetime.now(),
+                        )
+                    else:
+                        # Answer not found or expired
+                        chat_logger.debug(
+                            f"!more answer expired for {message.username}"
+                        )
+                else:
+                    # Prefix mapping not found
+                    chat_logger.debug(
+                        f"!more answer ID not found for {message.username}"
+                    )
+            else:
+                # No answer ID provided
+                chat_logger.debug(
+                    f"!more command without answer ID from {message.username}"
+                )
+        return MessageReceived(
+            received=True,
+            message_id=str(uuid.uuid4()),
+            timestamp=datetime.now(),
+        )
 
     # Check for @mention at start of message
     bot_name = settings.twitch_bot_name or "percepta"  # Fallback if not set
@@ -282,7 +414,7 @@ async def receive_message(message: ChatMessage):
 
     # If bot is mentioned and message contains "ping"
     if first_word == f"@{bot_name.lower()}" and "ping" in message.message.lower():
-        response_text = f"pong"
+        response_text = "pong"
         message_queue.append(
             {
                 "channel": message.channel,
@@ -291,6 +423,11 @@ async def receive_message(message: ChatMessage):
             }
         )
         chat_logger.info(f"Queued response: {response_text}")
+        return MessageReceived(
+            received=True,
+            message_id=str(uuid.uuid4()),
+            timestamp=datetime.now(),
+        )
 
     # Check if bot is mentioned with a question (not just ping)
     elif first_word == f"@{bot_name.lower()}" and rag_service:
@@ -300,7 +437,35 @@ async def receive_message(message: ChatMessage):
 
         # Skip if it was just "ping" (already handled above)
         if question and question.lower() != "ping":
-            # Check rate limit before processing RAG query
+            # Safety checks
+
+            # 1. Check content filtering (toxic/PII)
+            if not is_safe_for_chat(question):
+                chat_logger.info(
+                    f"Unsafe content detected from {message.username} in {message.channel}"
+                )
+                return MessageReceived(
+                    received=True,
+                    message_id=str(uuid.uuid4()),
+                    timestamp=datetime.now(),
+                )
+
+            # 2. Check global rate limit
+            if session_manager:
+                can_send_global = await session_manager.check_global_rate_limit(
+                    message.channel
+                )
+                if not can_send_global:
+                    chat_logger.info(
+                        f"Global rate limit exceeded for {message.channel}"
+                    )
+                    return MessageReceived(
+                        received=True,
+                        message_id=str(uuid.uuid4()),
+                        timestamp=datetime.now(),
+                    )
+
+            # 3. Check per-user rate limit
             if session_manager:
                 can_send = await session_manager.check_rate_limit(
                     message.username,
@@ -310,6 +475,41 @@ async def receive_message(message: ChatMessage):
                 if not can_send:
                     chat_logger.info(
                         f"Rate limit hit for {message.username} in {message.channel}"
+                    )
+                    return MessageReceived(
+                        received=True,
+                        message_id=str(uuid.uuid4()),
+                        timestamp=datetime.now(),
+                    )
+                # Update last_message_time immediately to prevent race conditions
+                # This ensures subsequent requests see the updated timestamp
+                try:
+                    session = await session_manager.get_session(
+                        message.username, message.channel
+                    )
+                    session["last_message_time"] = datetime.now(
+                        timezone.utc
+                    ).isoformat()
+                    key = session_manager._get_session_key(
+                        message.username, message.channel
+                    )
+                    await session_manager._save_session(key, session)
+                except Exception:
+                    # Don't fail if session update fails
+                    pass
+
+            # 4. Check repeated question cooldown
+            if session_manager:
+                can_ask, cooldown_key = (
+                    await session_manager.check_repeated_question_cooldown(
+                        message.username,
+                        message.channel,
+                        question,
+                    )
+                )
+                if not can_ask:
+                    chat_logger.info(
+                        f"Repeated question cooldown active for {message.username} in {message.channel}"
                     )
                     return MessageReceived(
                         received=True,
@@ -333,13 +533,15 @@ async def receive_message(message: ChatMessage):
                             # Fallback to channel name if conversion fails
                             pass
 
-                    # Trigger RAG query asynchronously
+                    # Trigger RAG query asynchronously with user session history
                     result = await rag_service.answer(
                         channel_id=channel_broadcaster_id,
                         question=question,
                         top_k=None,  # Use default from settings
                         half_life_minutes=None,  # Use default from settings
                         prefilter_limit=None,  # Use default from settings
+                        user_id=message.username,
+                        session_manager=session_manager,
                     )
 
                     # Extract answer text
@@ -347,6 +549,36 @@ async def receive_message(message: ChatMessage):
                         "answer",
                         "I don't have enough context to answer that right now.",
                     )
+
+                    # Filter response content for safety
+                    answer_text = filter_response_content(answer_text)
+
+                    # Handle response length limits
+                    if len(answer_text) > settings.max_response_length:
+                        # Truncate and store full answer
+                        truncated_answer = answer_text[: settings.max_response_length]
+                        answer_id = str(uuid.uuid4())
+                        answer_id_prefix = answer_id[:8]
+
+                        # Store full answer in Redis
+                        if session_manager:
+                            await session_manager.store_long_answer(
+                                answer_id,
+                                answer_text,
+                                settings.long_answer_storage_hours,
+                            )
+                            # Store prefix mapping for !more command
+                            await session_manager.store_answer_prefix_mapping(
+                                message.channel,
+                                message.username,
+                                answer_id_prefix,
+                                answer_id,
+                                settings.long_answer_storage_hours,
+                            )
+
+                        # Append instruction for !more
+                        truncated_answer += f" (Answer truncated. Use !more {answer_id_prefix} for full answer)"
+                        answer_text = truncated_answer
 
                     # Queue response
                     message_queue.append(
@@ -356,6 +588,9 @@ async def receive_message(message: ChatMessage):
                             "reply_to": message.username,
                         }
                     )
+
+                    # Note: Global rate limit counter is updated when messages are actually sent,
+                    # not when queued, to accurately track messages sent to Twitch
 
                     chat_logger.info(
                         f"Queued RAG response for @{message.username} in #{message.channel}: "
@@ -401,18 +636,13 @@ async def send_messages(request: SendRequest):
     Get queued messages to send to Twitch
 
     Node polls this endpoint to check if there are messages to send.
+    Respects global rate limits to prevent spam.
 
     Args:
         request: SendRequest with channel name
 
     Returns:
-        SendResponse: List of messages to send (empty for now)
-
-    TASK:
-    1. Log the request with INFO level
-       Format: f"Send request for channel: {channel}"
-    2. Return SendResponse with empty messages list
-       (Later phases will actually queue and return messages)
+        SendResponse: List of messages to send (respecting rate limits)
 
     LEARNING NOTE: Why polling instead of push?
     - Simpler architecture for MVP
@@ -430,6 +660,36 @@ async def send_messages(request: SendRequest):
         msg for msg in message_queue if msg["channel"] == request.channel
     ]
 
+    # Respect global rate limit - only send up to limit
+    responses = []
+    if session_manager:
+        # Check how many messages we can send
+        can_send_global = await session_manager.check_global_rate_limit(request.channel)
+        if not can_send_global:
+            # Rate limit exceeded, don't send any messages
+            chat_logger.debug(
+                f"Global rate limit exceeded for {request.channel}, skipping message send"
+            )
+            return SendResponse(messages=[])
+
+        # Calculate how many messages we can send in this batch
+        # Get current count
+        key = session_manager._get_global_rate_limit_key(request.channel)
+        if session_manager.redis_client and session_manager._connected:
+            try:
+                current_count_str = await session_manager.redis_client.get(key)
+                current_count = int(current_count_str) if current_count_str else 0
+                remaining = settings.global_rate_limit_msgs - current_count
+
+                # Only send up to remaining limit
+                if remaining > 0:
+                    channel_messages = channel_messages[:remaining]
+                else:
+                    channel_messages = []
+            except Exception:
+                # On error, allow sending (graceful degradation)
+                pass
+
     # Convert to ChatResponse objects
     responses = [
         ChatResponse(
@@ -441,6 +701,11 @@ async def send_messages(request: SendRequest):
     # Remove sent messages from queue
     for msg in channel_messages:
         message_queue.remove(msg)
+
+    # Update global rate limit counter for each message sent
+    if session_manager and responses:
+        for _ in responses:
+            await session_manager.update_global_rate_limit(request.channel)
 
     if responses:
         # Only log when actually sending messages (not empty polls)

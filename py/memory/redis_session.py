@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 
 import redis.asyncio as redis
 
@@ -25,6 +26,9 @@ class RedisSessionManager:
         redis_url: str,
         session_expiry_minutes: int = 15,
         max_history: int = 5,
+        global_rate_limit_msgs: int = 20,
+        global_rate_limit_window: int = 30,
+        repeated_question_cooldown: int = 60,
     ):
         """
         Initialize Redis session manager.
@@ -33,10 +37,16 @@ class RedisSessionManager:
             redis_url: Redis connection URL (e.g., "redis://localhost:6379/0")
             session_expiry_minutes: TTL for sessions in minutes
             max_history: Maximum number of Q&A pairs to store per session
+            global_rate_limit_msgs: Maximum messages allowed in time window
+            global_rate_limit_window: Time window in seconds for global rate limit
+            repeated_question_cooldown: Cooldown period in seconds for repeated questions
         """
         self.redis_url = redis_url
         self.session_expiry_seconds = session_expiry_minutes * 60
         self.max_history = max_history
+        self.global_rate_limit_msgs = global_rate_limit_msgs
+        self.global_rate_limit_window = global_rate_limit_window
+        self.repeated_question_cooldown = repeated_question_cooldown
         self.redis_client: Optional[redis.Redis] = None
         self._connected = False
 
@@ -63,6 +73,18 @@ class RedisSessionManager:
     def _get_session_key(self, user_id: str, channel: str) -> str:
         """Generate Redis key for session."""
         return f"session:{channel}:{user_id}"
+
+    def _get_global_rate_limit_key(self, channel: str) -> str:
+        """Generate Redis key for global rate limit counter."""
+        return f"global_rate_limit:{channel}"
+
+    def _get_repeated_question_cooldown_key(self, user_id: str, channel: str) -> str:
+        """Generate Redis key for repeated question cooldown."""
+        return f"cooldown:{channel}:{user_id}"
+
+    def _get_long_answer_key(self, answer_id: str) -> str:
+        """Generate Redis key for stored long answer."""
+        return f"long_answer:{answer_id}"
 
     async def get_session(
         self, user_id: str, channel: str
@@ -208,6 +230,234 @@ class RedisSessionManager:
             logger.error(f"Error checking rate limit for {user_id}: {e}")
             # Allow on error (graceful degradation)
             return True
+
+    async def check_global_rate_limit(self, channel: str) -> bool:
+        """
+        Check if global rate limit is exceeded.
+
+        Args:
+            channel: Channel name
+
+        Returns:
+            True if under limit, False if rate limit exceeded
+        """
+        if not self._connected or not self.redis_client:
+            # Allow if Redis unavailable (graceful degradation)
+            return True
+
+        key = self._get_global_rate_limit_key(channel)
+        try:
+            current_count = await self.redis_client.get(key)
+            if current_count is None:
+                # No messages yet, allow
+                return True
+
+            count = int(current_count)
+            if count >= self.global_rate_limit_msgs:
+                logger.info(
+                    f"Global rate limit exceeded for {channel}: "
+                    f"{count}/{self.global_rate_limit_msgs} messages"
+                )
+                return False
+
+            return True
+        except Exception as e:
+            logger.error(f"Error checking global rate limit for {channel}: {e}")
+            # Allow on error (graceful degradation)
+            return True
+
+    async def update_global_rate_limit(self, channel: str) -> None:
+        """
+        Increment global message counter with TTL.
+
+        Args:
+            channel: Channel name
+        """
+        if not self._connected or not self.redis_client:
+            return
+
+        key = self._get_global_rate_limit_key(channel)
+        try:
+            # Increment counter and set TTL if key doesn't exist
+            pipe = self.redis_client.pipeline()
+            pipe.incr(key)
+            pipe.expire(key, self.global_rate_limit_window)
+            await pipe.execute()
+        except Exception as e:
+            logger.error(f"Error updating global rate limit for {channel}: {e}")
+
+    def _normalize_question(self, question: str) -> str:
+        """
+        Normalize question for comparison (lowercase, remove punctuation).
+
+        Args:
+            question: Question text
+
+        Returns:
+            Normalized question string
+        """
+        # Convert to lowercase and remove extra whitespace
+        normalized = question.lower().strip()
+        # Remove common punctuation
+        normalized = re.sub(r'[^\w\s]', '', normalized)
+        # Remove extra whitespace
+        normalized = re.sub(r'\s+', ' ', normalized)
+        return normalized
+
+    async def check_repeated_question_cooldown(
+        self, user_id: str, channel: str, question: str
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Check if question is similar to recent questions and still in cooldown.
+
+        Args:
+            user_id: Username
+            channel: Channel name
+            question: New question to check
+
+        Returns:
+            Tuple of (is_allowed, cooldown_key)
+            - is_allowed: True if question can be asked, False if in cooldown
+            - cooldown_key: Redis key for cooldown if in cooldown, None otherwise
+        """
+        if not self._connected or not self.redis_client:
+            # Allow if Redis unavailable (graceful degradation)
+            return True, None
+
+        # Get session to check recent questions
+        session = await self.get_session(user_id, channel)
+        recent_questions = session.get("last_questions", [])
+        if not recent_questions:
+            # No recent questions, allow
+            return True, None
+
+        # Normalize the new question
+        normalized_question = self._normalize_question(question)
+
+        # Check if question is similar to any recent question
+        for recent_q in recent_questions:
+            normalized_recent = self._normalize_question(recent_q)
+            # Simple similarity check: if normalized questions are identical
+            if normalized_question == normalized_recent:
+                # Check if cooldown is still active
+                cooldown_key = self._get_repeated_question_cooldown_key(user_id, channel)
+                cooldown_active = await self.redis_client.exists(cooldown_key)
+                if cooldown_active:
+                    logger.info(
+                        f"Repeated question cooldown active for {user_id} in {channel}"
+                    )
+                    return False, cooldown_key
+                else:
+                    # Cooldown expired, set new cooldown
+                    await self.redis_client.setex(
+                        cooldown_key, self.repeated_question_cooldown, "1"
+                    )
+                    return True, None
+
+        # Question is not repeated, allow
+        return True, None
+
+    async def store_long_answer(
+        self, answer_id: str, full_answer: str, ttl_hours: int
+    ) -> None:
+        """
+        Store full answer in Redis for !more command.
+
+        Args:
+            answer_id: Unique identifier for the answer
+            full_answer: Full answer text to store
+            ttl_hours: Time to live in hours
+        """
+        if not self._connected or not self.redis_client:
+            return
+
+        key = self._get_long_answer_key(answer_id)
+        try:
+            await self.redis_client.setex(
+                key, ttl_hours * 3600, json.dumps({"answer": full_answer})
+            )
+        except Exception as e:
+            logger.error(f"Error storing long answer {answer_id}: {e}")
+
+    def _get_answer_prefix_key(self, channel: str, user_id: str, prefix: str) -> str:
+        """Generate Redis key for answer ID prefix mapping."""
+        return f"answer_prefix:{channel}:{user_id}:{prefix}"
+
+    async def store_answer_prefix_mapping(
+        self, channel: str, user_id: str, prefix: str, full_answer_id: str, ttl_hours: int
+    ) -> None:
+        """
+        Store mapping from answer prefix to full answer ID.
+
+        Args:
+            channel: Channel name
+            user_id: Username
+            prefix: Answer ID prefix (first 8 chars)
+            full_answer_id: Full UUID answer ID
+            ttl_hours: Time to live in hours
+        """
+        if not self._connected or not self.redis_client:
+            return
+
+        key = self._get_answer_prefix_key(channel, user_id, prefix)
+        try:
+            await self.redis_client.setex(
+                key, ttl_hours * 3600, json.dumps({"answer_id": full_answer_id})
+            )
+        except Exception as e:
+            logger.error(f"Error storing answer prefix mapping {prefix}: {e}")
+
+    async def get_answer_id_from_prefix(
+        self, channel: str, user_id: str, prefix: str
+    ) -> Optional[str]:
+        """
+        Get full answer ID from prefix.
+
+        Args:
+            channel: Channel name
+            user_id: Username
+            prefix: Answer ID prefix
+
+        Returns:
+            Full answer ID if found, None otherwise
+        """
+        if not self._connected or not self.redis_client:
+            return None
+
+        key = self._get_answer_prefix_key(channel, user_id, prefix)
+        try:
+            data = await self.redis_client.get(key)
+            if data:
+                stored = json.loads(data)
+                return stored.get("answer_id")
+            return None
+        except Exception as e:
+            logger.error(f"Error retrieving answer prefix mapping {prefix}: {e}")
+            return None
+
+    async def get_long_answer(self, answer_id: str) -> Optional[str]:
+        """
+        Retrieve stored long answer.
+
+        Args:
+            answer_id: Unique identifier for the answer
+
+        Returns:
+            Full answer text if found, None otherwise
+        """
+        if not self._connected or not self.redis_client:
+            return None
+
+        key = self._get_long_answer_key(answer_id)
+        try:
+            data = await self.redis_client.get(key)
+            if data:
+                stored = json.loads(data)
+                return stored.get("answer")
+            return None
+        except Exception as e:
+            logger.error(f"Error retrieving long answer {answer_id}: {e}")
+            return None
 
     async def cleanup_expired_sessions(self) -> None:
         """

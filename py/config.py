@@ -83,6 +83,14 @@ class Settings(BaseSettings):
     rate_limit_seconds: int = 10  # Minimum seconds between messages per user
     max_session_history: int = 5  # Maximum Q&A pairs to store per session
 
+    # Rate Limiting & Safety Configuration
+    admin_users: Optional[str] = None  # Comma-separated list of admin usernames
+    global_rate_limit_msgs: int = 20  # Messages per window
+    global_rate_limit_window: int = 30  # Window in seconds
+    repeated_question_cooldown: int = 60  # Cooldown in seconds for repeated questions
+    max_response_length: int = 500  # Max response length in chars
+    long_answer_storage_hours: int = 24  # TTL for stored long answers in hours
+
     class Config:
         """
         Pydantic configuration class

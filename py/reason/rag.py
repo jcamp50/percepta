@@ -194,20 +194,51 @@ class RAGService:
             )
         return citations
 
+    def _format_conversation_history(
+        self, questions: List[str], answers: List[str]
+    ) -> str:
+        """
+        Format conversation history for inclusion in prompt.
+
+        Args:
+            questions: List of previous questions
+            answers: List of previous answers
+
+        Returns:
+            Formatted conversation history string
+        """
+        if not questions or not answers:
+            return ""
+
+        history_lines = ["Previous conversation:"]
+        # Match up Q&A pairs (should be same length, but handle gracefully)
+        pairs = list(zip(questions, answers))
+        for i, (q, a) in enumerate(pairs, 1):
+            history_lines.append(f"Q{i}: {q}")
+            history_lines.append(f"A{i}: {a}")
+            history_lines.append("")  # Empty line between pairs
+
+        return "\n".join(history_lines)
+
     async def _build_messages(
         self,
         *,
         question: str,
         formatted_context: Sequence[str],
         channel_id: Optional[str] = None,
+        conversation_history: Optional[str] = None,
     ) -> List[dict]:
         context_section = (
             "\n".join(formatted_context) if formatted_context else "(no context)"
         )
+        
+        # Include conversation history if provided (empty string if not provided)
+        conversation_history_section = conversation_history if conversation_history else ""
         user_prompt = self._format_prompt(
             self._user_prompt_template,
             context_section=context_section,
             question=question,
+            conversation_history=conversation_history_section,
         )
 
         # Fetch latest channel metadata and format system prompt
@@ -349,6 +380,8 @@ class RAGService:
         top_k: Optional[int] = None,
         half_life_minutes: Optional[int] = None,
         prefilter_limit: Optional[int] = None,
+        user_id: Optional[str] = None,
+        session_manager: Optional[object] = None,
     ) -> dict:
         cleaned_question = question.strip()
         if not cleaned_question:
@@ -357,6 +390,22 @@ class RAGService:
         limit = top_k or self.top_k
         half_life = half_life_minutes or self.half_life_minutes
         prefilter = max(prefilter_limit or self.prefilter_limit, limit)
+
+        # Retrieve conversation history if user_id and session_manager provided
+        conversation_history = None
+        if user_id and session_manager and channel_id:
+            try:
+                session = await session_manager.get_session(user_id, channel_id)
+                questions = session.get("last_questions", [])
+                answers = session.get("last_answers", [])
+                if questions and answers:
+                    conversation_history = self._format_conversation_history(
+                        questions, answers
+                    )
+            except Exception as e:
+                # Log error but don't fail - graceful degradation
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Failed to retrieve conversation history: {e}")
 
         chunks = await self._retrieve_chunks(
             channel_id=channel_id,
@@ -367,10 +416,44 @@ class RAGService:
         )
 
         if not chunks:
+            # If we have conversation history, try to answer from that even without chunks
+            if conversation_history:
+                # Build prompts with conversation history but no chunks
+                messages = await self._build_messages(
+                    question=cleaned_question,
+                    formatted_context=[],
+                    channel_id=channel_id,
+                    conversation_history=conversation_history,
+                )
+                system_prompt = messages[0]["content"]
+                user_prompt_text = messages[1]["content"]
+                
+                # Try to generate answer from conversation history
+                try:
+                    answer_text = await self._call_llm(messages)
+                    if answer_text and len(answer_text.strip()) > 20:  # Substantive answer
+                        return {
+                            "answer": answer_text,
+                            "citations": [],
+                            "chunks": [],
+                            "context": [],
+                            "prompts": {
+                                "system": system_prompt,
+                                "user": user_prompt_text,
+                            },
+                        }
+                except Exception as e:
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Failed to generate answer from conversation history: {e}")
+            
+            # No chunks and no usable conversation history - fallback
             fallback = "I don't have enough context to answer that right now."
             # Build prompts for consistency with response schema
             messages = await self._build_messages(
-                question=cleaned_question, formatted_context=[], channel_id=channel_id
+                question=cleaned_question,
+                formatted_context=[],
+                channel_id=channel_id,
+                conversation_history=conversation_history,
             )
             system_prompt = messages[0]["content"]
             user_prompt_text = messages[1]["content"]
@@ -388,10 +471,43 @@ class RAGService:
         selected_chunks, formatted_context = self._select_context(chunks)
 
         if not selected_chunks:
+            # If we have conversation history, try to answer from that even without selected chunks
+            if conversation_history:
+                # Build prompts with conversation history but no chunks
+                messages = await self._build_messages(
+                    question=cleaned_question,
+                    formatted_context=[],
+                    channel_id=channel_id,
+                    conversation_history=conversation_history,
+                )
+                system_prompt = messages[0]["content"]
+                user_prompt_text = messages[1]["content"]
+                
+                # Try to generate answer from conversation history
+                try:
+                    answer_text = await self._call_llm(messages)
+                    if answer_text and len(answer_text.strip()) > 20:  # Substantive answer
+                        return {
+                            "answer": answer_text,
+                            "citations": [],
+                            "chunks": [],
+                            "context": [],
+                            "prompts": {
+                                "system": system_prompt,
+                                "user": user_prompt_text,
+                            },
+                        }
+                except Exception as e:
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Failed to generate answer from conversation history: {e}")
+            
             fallback = "I don't have enough context to answer that right now."
             # Build prompts even when no chunks selected
             messages = await self._build_messages(
-                question=cleaned_question, formatted_context=[], channel_id=channel_id
+                question=cleaned_question,
+                formatted_context=[],
+                channel_id=channel_id,
+                conversation_history=conversation_history,
             )
             system_prompt = messages[0]["content"]
             user_prompt_text = messages[1]["content"]
@@ -410,6 +526,7 @@ class RAGService:
             question=cleaned_question,
             formatted_context=formatted_context,
             channel_id=channel_id,
+            conversation_history=conversation_history,
         )
         system_prompt = messages[0]["content"]
         user_prompt_text = messages[1]["content"]
