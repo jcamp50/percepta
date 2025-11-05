@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     # log_level: str = "INFO"
     # port: int = 8000
     log_level: str = "INFO"
+    log_categories: Optional[str] = None  # Comma-separated categories (audio,chat,stream_metadata,stream_event_sub,system). If None, show all logs.
     port: int = 8000
     host: str = "0.0.0.0"
     openai_api_key: Optional[str] = None
@@ -64,15 +65,23 @@ class Settings(BaseSettings):
     twitch_client_id: Optional[str] = None
     twitch_bot_token: Optional[str] = None
     target_channel: Optional[str] = None  # Channel to monitor (e.g., "channelname")
-    
+
     # EventSub WebSocket Configuration
     eventsub_enabled: bool = True  # Enable/disable EventSub client
     eventsub_reconnect_delay: int = 5  # Initial reconnect delay in seconds
     eventsub_max_reconnect_delay: int = 60  # Maximum reconnect delay in seconds
-    
+
     # Channel Metadata Polling Configuration
     metadata_poll_enabled: bool = True  # Enable/disable metadata polling
     metadata_poll_interval_seconds: int = 60  # Poll every 60 seconds
+
+    # Redis Session Management Configuration
+    redis_host: str = "localhost"
+    redis_port: int = 6379
+    redis_db: int = 0
+    session_expiry_minutes: int = 15  # Session TTL in minutes
+    rate_limit_seconds: int = 10  # Minimum seconds between messages per user
+    max_session_history: int = 5  # Maximum Q&A pairs to store per session
 
     class Config:
         """

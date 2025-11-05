@@ -64,13 +64,14 @@ class AudioCapture {
     return new Promise((resolve, reject) => {
       ffmpeg.getAvailableEncoders((err, encoders) => {
         if (err) {
-          logger.error(`FFmpeg not found: ${err.message}`);
+          logger.error(`FFmpeg not found: ${err.message}`, 'audio');
           logger.info(
-            'Please install ffmpeg: https://ffmpeg.org/download.html'
+            'Please install ffmpeg: https://ffmpeg.org/download.html',
+            'audio'
           );
           reject(new Error('FFmpeg is required but not found in PATH'));
         } else {
-          logger.info('FFmpeg found, audio capture ready');
+          logger.info('FFmpeg found, audio capture ready', 'audio');
           resolve();
         }
       });
@@ -88,7 +89,7 @@ class AudioCapture {
       const token = this.twitchOAuthToken?.replace(/^oauth:/, '') || '';
 
       if (!token) {
-        logger.warn('No OAuth token provided for Twitch API calls');
+        logger.warn('No OAuth token provided for Twitch API calls', 'audio');
         return false;
       }
 
@@ -110,11 +111,12 @@ class AudioCapture {
       }
       if (error.response?.status === 401) {
         logger.error(
-          'Twitch API authentication failed. Check TWITCH_BOT_TOKEN and TWITCH_CLIENT_ID.'
+          'Twitch API authentication failed. Check TWITCH_BOT_TOKEN and TWITCH_CLIENT_ID.',
+          'audio'
         );
         return false;
       }
-      logger.warn(`Failed to check stream status: ${error.message}`);
+      logger.warn(`Failed to check stream status: ${error.message}`, 'audio');
       return false;
     }
   }
@@ -132,7 +134,7 @@ class AudioCapture {
     // First check if stream is live (still useful for early detection)
     const isLive = await this._checkStreamStatus(channelId);
     if (!isLive) {
-      logger.info(`Channel ${channelId} is not currently live`);
+      logger.info(`Channel ${channelId} is not currently live`, 'audio');
       return null;
     }
 
@@ -152,40 +154,50 @@ class AudioCapture {
 
       if (!available || !stream_url) {
         logger.warn(
-          `Audio-only stream not available for channel ${channelId} via Streamlink`
+          `Audio-only stream not available for channel ${channelId} via Streamlink`,
+          'audio'
         );
         return null;
       }
 
       logger.info(
-        `Retrieved authenticated audio-only stream URL for channel ${channelId} via Streamlink`
+        `Retrieved authenticated audio-only stream URL for channel ${channelId} via Streamlink`,
+        'audio'
       );
       return stream_url;
     } catch (error) {
-      logger.error(`Failed to get HLS URL via Streamlink: ${error.message}`);
+      logger.error(
+        `Failed to get HLS URL via Streamlink: ${error.message}`,
+        'audio'
+      );
 
       if (error.response) {
         // HTTP error response
         if (error.response.status === 503) {
           logger.error(
-            'Python Streamlink service unavailable. Ensure streamlink is installed: pip install streamlink'
+            'Python Streamlink service unavailable. Ensure streamlink is installed: pip install streamlink',
+            'audio'
           );
         } else if (error.response.status === 502) {
           logger.error(
-            `Streamlink plugin error for channel ${channelId}. Channel may be offline or restricted.`
+            `Streamlink plugin error for channel ${channelId}. Channel may be offline or restricted.`,
+            'audio'
           );
         } else if (error.response.status === 500) {
           logger.error(
-            'Python service error getting stream URL. Check Python service logs.'
+            'Python service error getting stream URL. Check Python service logs.',
+            'audio'
           );
         }
       } else if (error.code === 'ECONNREFUSED') {
         logger.error(
-          `Cannot connect to Python service at ${this.pythonServiceUrl}. Is it running?`
+          `Cannot connect to Python service at ${this.pythonServiceUrl}. Is it running?`,
+          'audio'
         );
       } else if (error.code === 'ETIMEDOUT') {
         logger.error(
-          'Timeout waiting for Python service response. Streamlink may be taking too long.'
+          'Timeout waiting for Python service response. Streamlink may be taking too long.',
+          'audio'
         );
       }
 
@@ -198,7 +210,7 @@ class AudioCapture {
    * @param {string} channelId - Channel name to monitor
    */
   _monitorStream(channelId) {
-    logger.info(`Starting stream monitor for ${channelId}`);
+    logger.info(`Starting stream monitor for ${channelId}`, 'audio');
 
     // Check every 30 seconds if stream is live
     this.streamMonitorInterval = setInterval(async () => {
@@ -206,14 +218,14 @@ class AudioCapture {
         // Already capturing, just verify still live
         const isLive = await this._checkStreamStatus(channelId);
         if (!isLive) {
-          logger.info('Stream went offline, stopping capture');
+          logger.info('Stream went offline, stopping capture', 'audio');
           await this.stopCapture();
         }
       } else {
         // Not capturing, check if stream went live
         const isLive = await this._checkStreamStatus(channelId);
         if (isLive) {
-          logger.info('Stream is now live, starting capture');
+          logger.info('Stream is now live, starting capture', 'audio');
           await this.startCapture(channelId);
         }
       }
@@ -252,10 +264,16 @@ class AudioCapture {
           maxBodyLength: Infinity,
         }
       );
-      logger.info(`Audio chunk sent successfully: ${metadata.channel_id}`);
+      logger.info(
+        `Audio chunk sent successfully: ${metadata.channel_id}`,
+        'audio'
+      );
     } catch (error) {
       // Log but don't crash - Python service might be down
-      logger.warn(`Failed to send audio chunk to Python: ${error.message}`);
+      logger.warn(
+        `Failed to send audio chunk to Python: ${error.message}`,
+        'audio'
+      );
     }
   }
 
@@ -352,10 +370,10 @@ class AudioCapture {
         ])
         .output(chunkPattern)
         .on('start', (commandLine) => {
-          logger.info(`FFmpeg started: ${channelId}`);
+          logger.info(`FFmpeg started: ${channelId}`, 'audio');
         })
         .on('end', () => {
-          logger.info(`FFmpeg ended for ${channelId}`);
+          logger.info(`FFmpeg ended for ${channelId}`, 'audio');
           this.isCapturing = false;
           resolve();
         })
@@ -364,14 +382,14 @@ class AudioCapture {
             err.message.includes('ECONNRESET') ||
             err.message.includes('ETIMEDOUT')
           ) {
-            logger.warn(`Stream connection error: ${err.message}`);
+            logger.warn(`Stream connection error: ${err.message}`, 'audio');
             this.isCapturing = false;
             resolve(); // Resolve to allow restart
           } else {
-            logger.error(`FFmpeg error: ${err.message}`);
+            logger.error(`FFmpeg error: ${err.message}`, 'audio');
             // Log more details for debugging
             if (err.stderr) {
-              logger.error(`FFmpeg stderr: ${err.stderr}`);
+              logger.error(`FFmpeg stderr: ${err.stderr}`, 'audio');
             }
             reject(err);
           }
@@ -379,7 +397,7 @@ class AudioCapture {
         .on('stderr', (stderrLine) => {
           // Log FFmpeg warnings/errors for monitoring
           if (stderrLine.includes('error') || stderrLine.includes('Error')) {
-            logger.warn(`FFmpeg: ${stderrLine.trim()}`);
+            logger.warn(`FFmpeg: ${stderrLine.trim()}`, 'audio');
           }
         })
         .on('progress', async (progress) => {
@@ -506,7 +524,8 @@ class AudioCapture {
                 }, ` +
                 `next to process: ${
                   chunkToProcess !== null ? chunkToProcess : 'none'
-                }`
+                }`,
+              'audio'
             );
 
             // Check FFmpeg process health
@@ -514,17 +533,24 @@ class AudioCapture {
               // FFmpeg process exists - fluent-ffmpeg manages it internally
               // We infer it's healthy if chunks are being created
               logger.info(
-                `[Diagnostics] FFmpeg process active (chunks being created)`
+                `[Diagnostics] FFmpeg process active (chunks being created)`,
+                'audio'
               );
             } else {
-              logger.warn(`[Diagnostics] FFmpeg process not available`);
+              logger.warn(
+                `[Diagnostics] FFmpeg process not available`,
+                'audio'
+              );
             }
 
             lastDiagnosticLog = now;
           }
         } catch (error) {
           // Directory might not exist yet or read failed
-          logger.warn(`[Diagnostics] Directory scan error: ${error.message}`);
+          logger.warn(
+            `[Diagnostics] Directory scan error: ${error.message}`,
+            'audio'
+          );
           return;
         }
 
@@ -620,7 +646,8 @@ class AudioCapture {
           // Final check: ensure file exists and has content
           if (!fs.existsSync(expectedChunk)) {
             logger.warn(
-              `Chunk file disappeared before processing: ${expectedChunk}`
+              `Chunk file disappeared before processing: ${expectedChunk}`,
+              'audio'
             );
             processingLocks.delete(chunkKey);
             return;
@@ -634,14 +661,16 @@ class AudioCapture {
             logger.warn(
               `Cannot read chunk file size: ${expectedChunk}, error: ${
                 statError.code || statError.message
-              }`
+              }`,
+              'audio'
             );
             processingLocks.delete(chunkKey);
             return;
           }
           if (finalSize === 0) {
             logger.warn(
-              `Chunk file is empty (0 bytes), skipping: ${expectedChunk}`
+              `Chunk file is empty (0 bytes), skipping: ${expectedChunk}`,
+              'audio'
             );
             // Mark as processed (even though skipped) to avoid reprocessing
             processedChunks.add(chunkKey);
@@ -660,11 +689,13 @@ class AudioCapture {
           } catch (readError) {
             if (readError.code === 'EBUSY') {
               logger.warn(
-                `Chunk file is locked, will retry later: ${expectedChunk}`
+                `Chunk file is locked, will retry later: ${expectedChunk}`,
+                'audio'
               );
             } else {
               logger.error(
-                `Error reading chunk file: ${expectedChunk}, error: ${readError.message}`
+                `Error reading chunk file: ${expectedChunk}, error: ${readError.message}`,
+                'audio'
               );
             }
             // Don't mark as processed - allow retry on next poll
@@ -674,7 +705,10 @@ class AudioCapture {
 
           // Verify buffer has content
           if (!chunkBuffer || chunkBuffer.length === 0) {
-            logger.warn(`Chunk buffer is empty, skipping: ${expectedChunk}`);
+            logger.warn(
+              `Chunk buffer is empty, skipping: ${expectedChunk}`,
+              'audio'
+            );
             processedChunks.add(chunkKey);
             chunkIndex = Math.max(chunkIndex, chunkToProcess + 1);
             processingLocks.delete(chunkKey);
@@ -684,7 +718,8 @@ class AudioCapture {
           logger.info(
             `Processing chunk ${chunkToProcess} (file: chunk_${channelId}_${String(
               chunkToProcess
-            ).padStart(3, '0')}.wav) for ${channelId}: ${finalSize} bytes`
+            ).padStart(3, '0')}.wav) for ${channelId}: ${finalSize} bytes`,
+            'audio'
           );
 
           // Mark as processed BEFORE sending (prevents duplicate processing)
@@ -712,7 +747,8 @@ class AudioCapture {
           processingLocks.delete(chunkKey);
         } catch (error) {
           logger.error(
-            `Error processing chunk ${chunkToProcess}: ${error.message}`
+            `Error processing chunk ${chunkToProcess}: ${error.message}`,
+            'audio'
           );
 
           // Don't mark as processed if it's a file access error (allow retry)
@@ -729,7 +765,8 @@ class AudioCapture {
             chunkIndex = Math.max(chunkIndex, chunkToProcess + 1);
           } else {
             logger.info(
-              `Will retry chunk ${chunkToProcess} on next poll (file access error)`
+              `Will retry chunk ${chunkToProcess} on next poll (file access error)`,
+              'audio'
             );
           }
 
@@ -751,7 +788,8 @@ class AudioCapture {
           logger.info(
             `Chunk polling active: processed ${
               processedChunks.size
-            } chunks, last processed: chunk ${chunkToProcess || 'none'}`
+            } chunks, last processed: chunk ${chunkToProcess || 'none'}`,
+            'audio'
           );
         }
       }, 1000); // Check every second
@@ -787,7 +825,8 @@ class AudioCapture {
         );
         if (attempt > 0) {
           logger.info(
-            `Successfully got broadcaster ID for ${channelName} after ${attempt} retry(ies)`
+            `Successfully got broadcaster ID for ${channelName} after ${attempt} retry(ies)`,
+            'audio'
           );
         }
         return response.data.broadcaster_id || null;
@@ -802,7 +841,8 @@ class AudioCapture {
         // If it's not a connection error, don't retry (e.g., 404 = channel not found)
         if (!isConnectionError) {
           logger.error(
-            `Failed to get broadcaster ID for ${channelName}: ${error.message}`
+            `Failed to get broadcaster ID for ${channelName}: ${error.message}`,
+            'audio'
           );
           return null;
         }
@@ -810,7 +850,8 @@ class AudioCapture {
         // If we've exhausted retries, give up
         if (attempt >= maxRetries) {
           logger.error(
-            `Failed to get broadcaster ID for ${channelName} after ${maxRetries} retries: ${error.message}`
+            `Failed to get broadcaster ID for ${channelName} after ${maxRetries} retries: ${error.message}`,
+            'audio'
           );
           return null;
         }
@@ -824,7 +865,8 @@ class AudioCapture {
         logger.warn(
           `Python service not ready yet, retrying broadcaster ID lookup for ${channelName} in ${Math.round(
             delay
-          )}ms (attempt ${attempt + 1}/${maxRetries})...`
+          )}ms (attempt ${attempt + 1}/${maxRetries})...`,
+          'audio'
         );
 
         // Wait before retrying
@@ -841,7 +883,7 @@ class AudioCapture {
    */
   async startCapture(channelId) {
     if (this.isCapturing) {
-      logger.warn(`Audio capture already running for ${channelId}`);
+      logger.warn(`Audio capture already running for ${channelId}`, 'audio');
       return;
     }
 
@@ -849,17 +891,18 @@ class AudioCapture {
     this.broadcasterId = await this._getBroadcasterId(channelId);
     if (!this.broadcasterId) {
       const errMsg = `Failed to get broadcaster ID for ${channelId}, cannot start capture`;
-      logger.error(errMsg);
+      logger.error(errMsg, 'audio');
       throw new Error(errMsg);
     }
     logger.info(
-      `Resolved channel ${channelId} to broadcaster ID: ${this.broadcasterId}`
+      `Resolved channel ${channelId} to broadcaster ID: ${this.broadcasterId}`,
+      'audio'
     );
 
     // Get HLS URL
     const hlsUrl = await this._getHlsUrl(channelId);
     if (!hlsUrl) {
-      logger.info(`Cannot start capture: stream is not live`);
+      logger.info(`Cannot start capture: stream is not live`, 'audio');
       // Start monitoring to auto-start when live
       this._monitorStream(channelId);
       return;
@@ -867,12 +910,12 @@ class AudioCapture {
 
     this.isCapturing = true;
     this.currentChunkStartTime = new Date();
-    logger.info(`Starting audio capture for ${channelId}`);
+    logger.info(`Starting audio capture for ${channelId}`, 'audio');
 
     try {
       await this._chunkAudio(hlsUrl, channelId);
     } catch (error) {
-      logger.error(`Audio capture failed: ${error.message}`);
+      logger.error(`Audio capture failed: ${error.message}`, 'audio');
       this.isCapturing = false;
       throw error;
     }
@@ -886,7 +929,7 @@ class AudioCapture {
       return;
     }
 
-    logger.info('Stopping audio capture...');
+    logger.info('Stopping audio capture...', 'audio');
 
     // Stop stream monitoring
     if (this.streamMonitorInterval) {
@@ -911,13 +954,13 @@ class AudioCapture {
       try {
         this.ffmpegProcess.kill('SIGTERM');
       } catch (error) {
-        logger.warn(`Error stopping ffmpeg: ${error.message}`);
+        logger.warn(`Error stopping ffmpeg: ${error.message}`, 'audio');
       }
       this.ffmpegProcess = null;
     }
 
     this.isCapturing = false;
-    logger.info('Audio capture stopped');
+    logger.info('Audio capture stopped', 'audio');
   }
 }
 

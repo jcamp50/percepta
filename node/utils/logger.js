@@ -7,6 +7,8 @@
  * - Single place to modify logging behavior
  */
 
+require('dotenv').config(); // Load .env file for environment variables
+
 // ANSI color codes for terminal output
 const colors = {
   reset: '\x1b[0m',
@@ -16,6 +18,46 @@ const colors = {
   cyan: '\x1b[36m',
   dim: '\x1b[2m',
 };
+
+// Log level hierarchy (lower number = more verbose)
+const LOG_LEVELS = {
+  DEBUG: 0,
+  INFO: 1,
+  WARN: 2,
+  ERROR: 3,
+};
+
+// Get log level from environment (default: INFO)
+const currentLogLevel = LOG_LEVELS[process.env.LOG_LEVEL?.toUpperCase()] ?? LOG_LEVELS.INFO;
+
+// Get allowed categories from environment (comma-separated)
+// If not set, show all categories (default behavior)
+const allowedCategories = process.env.LOG_CATEGORIES
+  ? process.env.LOG_CATEGORIES.split(',').map(cat => cat.trim().toLowerCase())
+  : null; // null means show all categories
+
+/**
+ * Check if a log should be displayed based on level and category
+ * @param {number} level - Log level (from LOG_LEVELS)
+ * @param {string|null} category - Category name (or null for system/unclassified)
+ * @returns {boolean} True if log should be displayed
+ */
+function shouldLog(level, category = null) {
+  // Check log level first
+  if (level < currentLogLevel) {
+    return false;
+  }
+
+  // If no category filter is set, show all logs
+  if (allowedCategories === null) {
+    return true;
+  }
+
+  // If category filter is set, check if this category is allowed
+  // If category is null/undefined, treat it as "system" category
+  const categoryToCheck = category ? category.toLowerCase() : 'system';
+  return allowedCategories.includes(categoryToCheck);
+}
 
 /**
  * Get current timestamp in readable format
@@ -30,42 +72,62 @@ function getTimestamp() {
 }
 
 /**
+ * Log a debug message
+ * @param {string} message - Message to log
+ * @param {string|null} category - Optional category for filtering (e.g., 'audio', 'chat', 'system')
+ */
+function debug(message, category = null) {
+  if (!shouldLog(LOG_LEVELS.DEBUG, category)) {
+    return;
+  }
+  console.log(`${colors.dim}[${getTimestamp()}] DEBUG: ${message}${colors.reset}`);
+}
+
+/**
  * Log an info message
  * @param {string} message - Message to log
- *
- * TASK: Format as "[TIMESTAMP] INFO: message" in default color
+ * @param {string|null} category - Optional category for filtering (e.g., 'audio', 'chat', 'system')
  */
-function info(message) {
+function info(message, category = null) {
+  if (!shouldLog(LOG_LEVELS.INFO, category)) {
+    return;
+  }
   console.log(`${colors.dim}[${getTimestamp()}] INFO: ${message}${colors.reset}`);
 }
 
 /**
  * Log a success message
  * @param {string} message - Success message
- *
- * TASK: Format as "[TIMESTAMP] ✓ message" in green
+ * @param {string|null} category - Optional category for filtering (e.g., 'audio', 'chat', 'system')
  */
-function success(message) {
+function success(message, category = null) {
+  if (!shouldLog(LOG_LEVELS.INFO, category)) {
+    return;
+  }
   console.log(`${colors.green}[${getTimestamp()}] ✓ ${message}${colors.reset}`);
 }
 
 /**
  * Log an error message
  * @param {string} message - Error message
- *
- * TASK: Format as "[TIMESTAMP] ✗ ERROR: message" in red
+ * @param {string|null} category - Optional category for filtering (e.g., 'audio', 'chat', 'system')
  */
-function error(message) {
+function error(message, category = null) {
+  if (!shouldLog(LOG_LEVELS.ERROR, category)) {
+    return;
+  }
   console.log(`${colors.red}[${getTimestamp()}] ✗ ERROR: ${message}${colors.reset}`);
 }
 
 /**
  * Log a warning message
  * @param {string} message - Warning message
- *
- * TASK: Format as "[TIMESTAMP] ⚠ WARN: message" in yellow
+ * @param {string|null} category - Optional category for filtering (e.g., 'audio', 'chat', 'system')
  */
-function warn(message) {
+function warn(message, category = null) {
+  if (!shouldLog(LOG_LEVELS.WARN, category)) {
+    return;
+  }
   console.log(`${colors.yellow}[${getTimestamp()}] ⚠ WARN: ${message}${colors.reset}`);
 }
 
@@ -74,16 +136,21 @@ function warn(message) {
  * @param {string} channel - Channel name
  * @param {string} username - User who sent message
  * @param {string} message - Message content
+ * @param {string|null} category - Optional category for filtering (defaults to 'chat')
  *
  * TASK: Format as "[TIMESTAMP] #channel [username]: message" in cyan
  * This helps distinguish chat messages from system logs
  */
-function chat(channel, username, message) {
+function chat(channel, username, message, category = 'chat') {
+  if (!shouldLog(LOG_LEVELS.INFO, category)) {
+    return;
+  }
   console.log(`${colors.cyan}[${getTimestamp()}] #${channel} ${username}: ${message}${colors.reset}`);
 }
 
 // Export all logging functions
 module.exports = {
+  debug,
   info,
   success,
   error,

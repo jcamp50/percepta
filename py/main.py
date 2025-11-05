@@ -40,7 +40,9 @@ from py.ingest.twitch import EventSubWebSocketClient
 from py.ingest.metadata import ChannelMetadataPoller
 from py.ingest.event_handler import EventHandler
 from py.memory.vector_store import VectorStore
+from py.memory.redis_session import RedisSessionManager
 from py.utils.embeddings import embed_text
+from py.utils.logging import get_logger
 
 # Configure logging
 # TASK: Set up Python logging
@@ -58,7 +60,14 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 
-logger = logging.getLogger(__name__)
+# Use category-aware logger for system logs
+logger = get_logger(__name__, category="system")
+
+# Category-specific loggers for different endpoints
+chat_logger = get_logger(f"{__name__}.chat", category="chat")
+audio_logger = get_logger(f"{__name__}.audio", category="audio")
+stream_event_logger = get_logger(f"{__name__}.eventsub", category="stream_event_sub")
+stream_metadata_logger = get_logger(f"{__name__}.metadata", category="stream_metadata")
 
 # Configure uvicorn access logger to filter chat polling endpoints
 # This reduces log noise from frequent chat polling
@@ -153,6 +162,18 @@ except Exception as exc:
     logger.warning("Vector store unavailable: %s", exc)
     vector_store = None
 
+# Initialize Redis session manager
+session_manager: Optional[RedisSessionManager] = None
+try:
+    session_manager = RedisSessionManager(
+        redis_url=f"redis://{settings.redis_host}:{settings.redis_port}/{settings.redis_db}",
+        session_expiry_minutes=settings.session_expiry_minutes,
+        max_history=settings.max_session_history,
+    )
+    logger.info("Redis session manager initialized")
+except Exception as exc:
+    logger.warning("Session manager unavailable: %s", exc)
+    session_manager = None
 
 # Initialize EventSub WebSocket client
 eventsub_client: Optional[EventSubWebSocketClient] = None
@@ -249,7 +270,7 @@ async def receive_message(message: ChatMessage):
     # Chat messages - reduce logging verbosity (chat is working)
     # Only log if it's an @mention or important message
     if message.message.strip().startswith("@"):
-        logger.debug(
+        chat_logger.debug(
             f"Received @mention from {message.username} in #{message.channel}: {message.message}"
         )
     # Otherwise, silently process (chat I/O is working, focus on audio transcription)
@@ -269,7 +290,7 @@ async def receive_message(message: ChatMessage):
                 "reply_to": message.username,
             }
         )
-        logger.info(f"Queued response: {response_text}")
+        chat_logger.info(f"Queued response: {response_text}")
 
     # Check if bot is mentioned with a question (not just ping)
     elif first_word == f"@{bot_name.lower()}" and rag_service:
@@ -279,6 +300,23 @@ async def receive_message(message: ChatMessage):
 
         # Skip if it was just "ping" (already handled above)
         if question and question.lower() != "ping":
+            # Check rate limit before processing RAG query
+            if session_manager:
+                can_send = await session_manager.check_rate_limit(
+                    message.username,
+                    message.channel,
+                    settings.rate_limit_seconds,
+                )
+                if not can_send:
+                    chat_logger.info(
+                        f"Rate limit hit for {message.username} in {message.channel}"
+                    )
+                    return MessageReceived(
+                        received=True,
+                        message_id=str(uuid.uuid4()),
+                        timestamp=datetime.now(),
+                    )
+
             # Validate question has reasonable content
             if len(question) >= 3:  # Minimum meaningful question
                 try:
@@ -319,19 +357,34 @@ async def receive_message(message: ChatMessage):
                         }
                     )
 
-                    logger.info(
+                    chat_logger.info(
                         f"Queued RAG response for @{message.username} in #{message.channel}: "
                         f"{answer_text[:100]}{'...' if len(answer_text) > 100 else ''}"
                     )
+
+                    # Update session with Q&A pair
+                    if session_manager:
+                        try:
+                            await session_manager.update_session(
+                                user_id=message.username,
+                                channel=message.channel,
+                                question=question,
+                                answer=answer_text,
+                            )
+                        except Exception as session_exc:
+                            # Log but don't fail if session update fails
+                            chat_logger.warning(
+                                f"Failed to update session for {message.username}: {session_exc}"
+                            )
                 except Exception as e:
                     # Log error but don't crash - gracefully handle RAG failures
-                    logger.error(
+                    chat_logger.error(
                         f"RAG query failed for @{message.username} in #{message.channel}: {e}",
                         exc_info=True,
                     )
             else:
                 # Question too short/empty
-                logger.debug(
+                chat_logger.debug(
                     f"Received @mention with empty/short question from {message.username}: '{question}'"
                 )
 
@@ -391,7 +444,7 @@ async def send_messages(request: SendRequest):
 
     if responses:
         # Only log when actually sending messages (not empty polls)
-        logger.debug(
+        chat_logger.debug(
             f"Returning {len(responses)} message(s) for channel {request.channel}"
         )
 
@@ -496,7 +549,7 @@ async def get_audio_stream_url(channel_id: str):
 
         if audio_stream is None:
             # Stream is not available (offline or no audio stream)
-            logger.warning(
+            audio_logger.warning(
                 f"Audio-only stream not available for channel {channel_id}. "
                 "Channel may be offline or stream not started."
             )
@@ -510,7 +563,7 @@ async def get_audio_stream_url(channel_id: str):
         # Extract the authenticated HLS URL
         stream_url = audio_stream.url
 
-        logger.info(
+        audio_logger.info(
             f"Retrieved audio-only stream URL for channel {channel_id}: "
             f"{stream_url[:100]}..."  # Log first 100 chars for security
         )
@@ -569,7 +622,7 @@ async def transcribe_audio(
         audio_content = await audio_file.read()
         file_size = len(audio_content)
 
-        logger.info(
+        audio_logger.info(
             f"Received audio chunk: channel={channel_id}, "
             f"size={file_size} bytes, "
             f"started_at={started_at}, ended_at={ended_at}"
@@ -632,12 +685,12 @@ async def transcribe_audio(
                     embedding = await embed_text(result.transcript)
                     embedding_elapsed = time.perf_counter() - embedding_start
                     embedding_latency_ms = int(embedding_elapsed * 1000)
-                    logger.info(
+                    audio_logger.info(
                         f"Embedding generated: channel={channel_id}, "
                         f"latency={embedding_latency_ms}ms"
                     )
                 except Exception as embed_exc:
-                    logger.error(
+                    audio_logger.error(
                         f"Failed to generate embedding: channel={channel_id}, "
                         f"error={str(embed_exc)}"
                     )
@@ -657,12 +710,12 @@ async def transcribe_audio(
                     db_insert_latency_ms = int(db_elapsed * 1000)
                     stored_in_db = True
                     transcript_id = inserted_id
-                    logger.info(
+                    audio_logger.info(
                         f"Transcript stored in DB: channel={channel_id}, "
                         f"id={transcript_id}, latency={db_insert_latency_ms}ms"
                     )
                 except Exception as db_exc:
-                    logger.error(
+                    audio_logger.error(
                         f"Failed to insert transcript into DB: channel={channel_id}, "
                         f"error={str(db_exc)}"
                     )
@@ -701,7 +754,7 @@ async def transcribe_audio(
         if db_insert_latency_ms:
             total_latency += db_insert_latency_ms
 
-        logger.info(
+        audio_logger.info(
             f"Pipeline complete: channel={channel_id}, "
             f"duration={result.duration:.2f}s, "
             f"transcription={result.processing_time_ms}ms, "
@@ -717,7 +770,7 @@ async def transcribe_audio(
     except HTTPException:
         raise
     except Exception as exc:
-        logger.exception("Failed to transcribe audio chunk")
+        audio_logger.exception("Failed to transcribe audio chunk")
         raise HTTPException(
             status_code=500, detail=f"Failed to transcribe audio: {str(exc)}"
         ) from exc
@@ -741,6 +794,16 @@ async def startup_event():
     """
     logger.info(f"Percepta Python service starting on {settings.host}:{settings.port}")
 
+    # Connect Redis session manager
+    global session_manager
+    if session_manager:
+        try:
+            await session_manager.connect()
+            logger.info("Redis session manager connected")
+        except Exception as exc:
+            logger.warning(f"Failed to connect session manager: {exc}")
+            session_manager = None
+
     # Preload Whisper model to avoid first-request delay
     if transcription_service is not None:
         try:
@@ -755,18 +818,18 @@ async def startup_event():
     if eventsub_client:
         try:
             await eventsub_client.connect()
-            logger.info("EventSub WebSocket connection started")
+            stream_event_logger.info("EventSub WebSocket connection started")
         except Exception as exc:
-            logger.error(f"Failed to start EventSub connection: {exc}")
+            stream_event_logger.error(f"Failed to start EventSub connection: {exc}")
 
     # Start metadata polling
     global metadata_poller
     if metadata_poller:
         try:
             await metadata_poller.start()
-            logger.info("Metadata polling started")
+            stream_metadata_logger.info("Metadata polling started")
         except Exception as exc:
-            logger.error(f"Failed to start metadata polling: {exc}")
+            stream_metadata_logger.error(f"Failed to start metadata polling: {exc}")
 
 
 @app.on_event("shutdown")
@@ -782,23 +845,32 @@ async def shutdown_event():
     """
     logger.info("Percepta Python service shutting down")
 
+    # Close Redis session manager
+    global session_manager
+    if session_manager:
+        try:
+            await session_manager.close()
+            logger.info("Redis session manager closed")
+        except Exception as exc:
+            logger.error(f"Error closing session manager: {exc}")
+
     # Stop metadata polling
     global metadata_poller
     if metadata_poller:
         try:
             await metadata_poller.stop()
-            logger.info("Metadata polling stopped")
+            stream_metadata_logger.info("Metadata polling stopped")
         except Exception as exc:
-            logger.error(f"Error stopping metadata polling: {exc}")
+            stream_metadata_logger.error(f"Error stopping metadata polling: {exc}")
 
     # Close EventSub WebSocket connection
     global eventsub_client
     if eventsub_client:
         try:
             await eventsub_client.disconnect()
-            logger.info("EventSub WebSocket connection closed")
+            stream_event_logger.info("EventSub WebSocket connection closed")
         except Exception as exc:
-            logger.error(f"Error closing EventSub connection: {exc}")
+            stream_event_logger.error(f"Error closing EventSub connection: {exc}")
 
 
 """

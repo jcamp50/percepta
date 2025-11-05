@@ -19,8 +19,9 @@ from schemas.events import (
 )
 from py.memory.vector_store import VectorStore
 from py.utils.embeddings import embed_text
+from py.utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, category='stream_event_sub')
 
 
 class EventHandler:
