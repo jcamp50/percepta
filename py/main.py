@@ -19,6 +19,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timezone
 from typing import Optional, List
 import logging
+import os
+import tempfile
 import time
 import uuid
 
@@ -40,10 +42,12 @@ from py.ingest.twitch import EventSubWebSocketClient
 from py.ingest.metadata import ChannelMetadataPoller
 from py.ingest.event_handler import EventHandler
 from py.memory.vector_store import VectorStore
+from py.memory.video_store import VideoStore
 from py.memory.redis_session import RedisSessionManager
 from py.utils.embeddings import embed_text
 from py.utils.logging import get_logger
 from py.utils.content_filter import is_safe_for_chat, filter_response_content
+from py.utils.twitch_api import get_broadcaster_id_from_channel_name
 
 # Configure logging
 # TASK: Set up Python logging
@@ -67,6 +71,7 @@ logger = get_logger(__name__, category="system")
 # Category-specific loggers for different endpoints
 chat_logger = get_logger(f"{__name__}.chat", category="chat")
 audio_logger = get_logger(f"{__name__}.audio", category="audio")
+video_logger = get_logger(f"{__name__}.video", category="video")
 stream_event_logger = get_logger(f"{__name__}.eventsub", category="stream_event_sub")
 stream_metadata_logger = get_logger(f"{__name__}.metadata", category="stream_metadata")
 
@@ -149,12 +154,6 @@ if settings.admin_users:
         user.strip().lower() for user in settings.admin_users.split(",") if user.strip()
     ]
 
-try:
-    rag_service: Optional[RAGService] = RAGService()
-except ValueError as exc:
-    logger.warning("RAG service unavailable: %s", exc)
-    rag_service = None
-
 # Initialize transcription service (singleton)
 try:
     transcription_service: Optional[TranscriptionService] = (
@@ -172,6 +171,23 @@ try:
 except Exception as exc:
     logger.warning("Vector store unavailable: %s", exc)
     vector_store = None
+
+# Initialize video store for video frame storage
+try:
+    video_store: Optional[VideoStore] = VideoStore()
+    logger.info("Video store initialized")
+except Exception as exc:
+    logger.warning("Video store unavailable: %s", exc)
+    video_store = None
+
+# Initialize RAG service (after stores are initialized)
+try:
+    rag_service: Optional[RAGService] = RAGService(
+        vector_store=vector_store, video_store=video_store
+    )
+except ValueError as exc:
+    logger.warning("RAG service unavailable: %s", exc)
+    rag_service = None
 
 # Initialize Redis session manager
 session_manager: Optional[RedisSessionManager] = None
@@ -223,33 +239,6 @@ if settings.metadata_poll_enabled:
 # ============================================================================
 
 
-@app.get("/health")
-async def health_check():
-    """
-    Health check endpoint
-
-    Returns service status. Used by:
-    - Docker health checks
-    - Load balancers
-    - Monitoring systems
-    """
-    global eventsub_client
-    eventsub_status = "disconnected"
-    if eventsub_client:
-        if eventsub_client.is_connected:
-            eventsub_status = "connected"
-        else:
-            eventsub_status = "disconnected"
-
-    return {
-        "status": "healthy",
-        "service": "percepta-python",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "eventsub": {
-            "enabled": settings.eventsub_enabled,
-            "status": eventsub_status,
-        },
-    }
 
 
 def is_admin_user(username: str) -> bool:
@@ -522,16 +511,10 @@ async def receive_message(message: ChatMessage):
                 try:
                     # Convert channel name to broadcaster ID for RAG queries
                     channel_broadcaster_id = message.channel
-                    if eventsub_client and eventsub_client.http_client:
-                        try:
-                            broadcaster_id = await eventsub_client._get_broadcaster_id(
-                                message.channel
-                            )
-                            if broadcaster_id:
-                                channel_broadcaster_id = broadcaster_id
-                        except Exception:
-                            # Fallback to channel name if conversion fails
-                            pass
+                    # Try to get broadcaster ID using shared utility function
+                    broadcaster_id = await get_broadcaster_id_from_channel_name(message.channel)
+                    if broadcaster_id:
+                        channel_broadcaster_id = broadcaster_id
 
                     # Trigger RAG query asynchronously with user session history
                     result = await rag_service.answer(
@@ -725,20 +708,12 @@ async def rag_answer(request: RAGQueryRequest):
 
     # Convert channel name to broadcaster ID if needed
     # If it's numeric, assume it's already a broadcaster ID
-    # Otherwise, try to convert it
+    # Otherwise, try to convert it using shared utility function
     channel_id = request.channel
-    if (
-        not request.channel.isdigit()
-        and eventsub_client
-        and eventsub_client.http_client
-    ):
-        try:
-            broadcaster_id = await eventsub_client._get_broadcaster_id(request.channel)
-            if broadcaster_id:
-                channel_id = broadcaster_id
-        except Exception:
-            # Fallback to original value if conversion fails
-            pass
+    if not request.channel.isdigit():
+        broadcaster_id = await get_broadcaster_id_from_channel_name(request.channel)
+        if broadcaster_id:
+            channel_id = broadcaster_id
 
     try:
         result = await rag_service.answer(
@@ -757,6 +732,82 @@ async def rag_answer(request: RAGQueryRequest):
     return RAGAnswerResponse(**result)
 
 
+@app.get("/api/debug-credentials")
+async def debug_credentials():
+    """Debug endpoint to check what credentials are loaded"""
+    client_id = settings.twitch_client_id or ""
+    bot_token = settings.twitch_bot_token or ""
+    
+    return {
+        "client_id_present": bool(client_id),
+        "client_id_length": len(client_id),
+        "client_id_prefix": client_id[:10] if client_id else None,
+        "bot_token_present": bool(bot_token),
+        "bot_token_length": len(bot_token),
+        "bot_token_prefix": bot_token[:10] if bot_token else None,
+        "bot_token_has_oauth_prefix": bot_token.startswith("oauth:") if bot_token else False,
+    }
+
+@app.get("/health")
+async def health_check():
+    """
+    Health check endpoint to verify service is working correctly.
+    
+    Returns service status. Used by:
+    - Docker health checks
+    - Load balancers
+    - Monitoring systems
+    
+    Tests broadcaster ID lookup to ensure the service can communicate with Twitch API.
+    Uses TARGET_CHANNEL from .env for validation.
+    """
+    global eventsub_client
+    eventsub_status = "disconnected"
+    if eventsub_client:
+        if eventsub_client.is_connected:
+            eventsub_status = "connected"
+        else:
+            eventsub_status = "disconnected"
+
+    # Test broadcaster ID lookup using configured target channel
+    broadcaster_id_lookup_status = "skipped"
+    broadcaster_id_lookup_error = None
+    test_channel = None
+    test_broadcaster_id = None
+    
+    if settings.target_channel:
+        try:
+            test_id = await get_broadcaster_id_from_channel_name(settings.target_channel)
+            if test_id:
+                broadcaster_id_lookup_status = "working"
+                test_channel = settings.target_channel
+                test_broadcaster_id = test_id
+            else:
+                broadcaster_id_lookup_status = "failed"
+                broadcaster_id_lookup_error = "Broadcaster ID lookup returned None"
+                test_channel = settings.target_channel
+        except Exception as e:
+            broadcaster_id_lookup_status = "error"
+            broadcaster_id_lookup_error = str(e)
+            test_channel = settings.target_channel
+            logger.error(f"Health check broadcaster ID lookup failed: {e}", exc_info=True)
+
+    return {
+        "status": "healthy",
+        "service": "percepta-python",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "eventsub": {
+            "enabled": settings.eventsub_enabled,
+            "status": eventsub_status,
+        },
+        "broadcaster_id_lookup": {
+            "status": broadcaster_id_lookup_status,
+            "test_channel": test_channel,
+            "test_broadcaster_id": test_broadcaster_id,
+            "error": broadcaster_id_lookup_error,
+        },
+    }
+
 @app.get("/api/get-broadcaster-id")
 async def get_broadcaster_id(channel_name: str):
     """
@@ -771,21 +822,25 @@ async def get_broadcaster_id(channel_name: str):
     Returns:
         JSON with broadcaster_id
     """
-    if not eventsub_client or not eventsub_client.http_client:
-        raise HTTPException(status_code=503, detail="EventSub client not available")
-
     try:
-        broadcaster_id = await eventsub_client._get_broadcaster_id(channel_name)
-        if not broadcaster_id:
+        # Use shared utility function that matches metadata poller pattern
+        broadcaster_id = await get_broadcaster_id_from_channel_name(channel_name)
+        
+        if broadcaster_id:
+            return {"broadcaster_id": broadcaster_id, "channel_name": channel_name}
+        else:
             raise HTTPException(
-                status_code=404, detail=f"Channel not found: {channel_name}"
+                status_code=404,
+                detail=f"Channel not found: {channel_name}. Failed to get broadcaster ID from Twitch API."
             )
-        return {"broadcaster_id": broadcaster_id, "channel_name": channel_name}
-    except Exception as exc:
-        logger.error(f"Failed to get broadcaster ID: {exc}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in get_broadcaster_id endpoint: {e}", exc_info=True)
         raise HTTPException(
-            status_code=500, detail=f"Failed to get broadcaster ID: {str(exc)}"
-        ) from exc
+            status_code=500,
+            detail=f"Failed to get broadcaster ID: {str(e)}"
+        )
 
 
 @app.get("/api/get-audio-stream-url", response_model=AudioStreamUrlResponse)
@@ -862,6 +917,147 @@ async def get_audio_stream_url(channel_id: str):
         )
         raise HTTPException(
             status_code=500, detail=f"Failed to get stream URL: {str(exc)}"
+        ) from exc
+
+
+@app.get("/api/get-video-stream-url", response_model=AudioStreamUrlResponse)
+async def get_video_stream_url(channel_id: str):
+    """
+    Get authenticated Twitch video stream URL using Streamlink.
+
+    This endpoint uses Streamlink's Python API to obtain authenticated HLS URLs
+    for Twitch video streams. Streamlink handles all authentication internally,
+    including OAuth tokens and client-integrity tokens.
+
+    Returns an HLS URL that can be used directly with FFmpeg for video capture.
+    """
+    try:
+        import streamlink
+
+        # Create Streamlink session
+        session = streamlink.Streamlink()
+
+        # Get streams for the Twitch channel
+        twitch_url = f"https://www.twitch.tv/{channel_id}"
+        streams = session.streams(twitch_url)
+
+        # Get the best quality video stream (or worst for lower bandwidth)
+        video_stream = streams.get("best")
+
+        if video_stream is None:
+            # Stream is not available (offline or restricted)
+            return AudioStreamUrlResponse(
+                channel_id=channel_id,
+                available=False,
+                stream_url=None
+            )
+
+        # Get the HLS URL
+        stream_url = video_stream.url
+
+        return AudioStreamUrlResponse(
+            channel_id=channel_id,
+            available=True,
+            stream_url=stream_url
+        )
+
+    except ImportError:
+        logger.error(
+            "Streamlink not installed. Please install with: pip install streamlink"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Streamlink library not available. Please install streamlink.",
+        )
+    except streamlink.exceptions.NoPluginError:
+        logger.error(f"No Streamlink plugin found for Twitch URL: {twitch_url}")
+        raise HTTPException(
+            status_code=500, detail="Streamlink Twitch plugin not available"
+        )
+    except streamlink.exceptions.PluginError as exc:
+        logger.error(f"Streamlink plugin error for channel {channel_id}: {str(exc)}")
+        raise HTTPException(status_code=502, detail=f"Failed to get stream: {str(exc)}")
+    except Exception as exc:
+        logger.exception(
+            f"Unexpected error getting video stream URL for channel {channel_id}"
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get stream URL: {str(exc)}"
+        ) from exc
+
+
+@app.post("/api/video-frame")
+async def receive_video_frame(
+    image_file: UploadFile = File(..., description="Video frame image (JPEG/PNG)"),
+    channel_id: str = Form(..., description="Broadcaster channel ID"),
+    captured_at: str = Form(..., description="ISO timestamp when frame was captured"),
+):
+    """
+    Receive video frame screenshot from Node service and store in vector DB.
+
+    Complete pipeline: image → CLIP embedding → vector DB storage.
+    Receives screenshot images from Twitch streams, generates CLIP embeddings,
+    and stores frames in pgvector for RAG queries.
+    """
+    if video_store is None:
+        raise HTTPException(status_code=503, detail="Video store unavailable")
+
+    try:
+        # Read image file content
+        image_content = await image_file.read()
+        file_size = len(image_content)
+
+        video_logger.info(
+            f"Received video frame: channel={channel_id}, "
+            f"size={file_size} bytes, captured_at={captured_at}"
+        )
+
+        # Validate image file
+        if file_size == 0:
+            raise HTTPException(status_code=400, detail="Image file is empty")
+
+        # Save uploaded file temporarily
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
+            tmp_file.write(image_content)
+            tmp_path = tmp_file.name
+
+        try:
+            # Parse timestamp
+            captured_at_str = (
+                captured_at.replace("Z", "+00:00")
+                if captured_at.endswith("Z")
+                else captured_at
+            )
+            captured_at_obj = datetime.fromisoformat(captured_at_str)
+
+            # Store frame in database (VideoStore will generate embedding and move file)
+            frame_id = await video_store.insert_frame(
+                channel_id=channel_id,
+                image_path=tmp_path,
+                captured_at=captured_at_obj,
+            )
+
+            video_logger.info(
+                f"Stored video frame: frame_id={frame_id}, channel={channel_id}"
+            )
+
+            return {"frame_id": frame_id, "status": "success"}
+
+        except Exception as e:
+            # Clean up temp file on error
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            raise
+
+    except ValueError as e:
+        # Invalid timestamp format
+        video_logger.error(f"Invalid timestamp format: {captured_at}")
+        raise HTTPException(status_code=400, detail=f"Invalid timestamp format: {str(e)}")
+    except Exception as exc:
+        video_logger.exception(f"Failed to process video frame: {exc}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to process video frame: {str(exc)}"
         ) from exc
 
 
@@ -1095,6 +1291,25 @@ async def startup_event():
             stream_metadata_logger.info("Metadata polling started")
         except Exception as exc:
             stream_metadata_logger.error(f"Failed to start metadata polling: {exc}")
+    
+    # Validate broadcaster ID lookup on startup
+    if settings.target_channel:
+        try:
+            test_id = await get_broadcaster_id_from_channel_name(settings.target_channel)
+            if test_id:
+                logger.info(f"Broadcaster ID lookup validated on startup for channel: {settings.target_channel} (ID: {test_id})")
+            else:
+                logger.warning(
+                    f"Broadcaster ID lookup returned None for channel: {settings.target_channel}. "
+                    "Service may have issues."
+                )
+        except Exception as exc:
+            logger.error(
+                f"CRITICAL: Broadcaster ID lookup validation failed on startup for channel {settings.target_channel}: {exc}. "
+                "Service may not function correctly."
+            )
+    else:
+        logger.warning("TARGET_CHANNEL not set in .env, skipping broadcaster ID lookup validation")
 
 
 @app.on_event("shutdown")

@@ -54,3 +54,16 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_channel_ts
 CREATE INDEX IF NOT EXISTS idx_snapshots_embedding
   ON channel_snapshots USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 
+-- Video frames: screenshots from Twitch streams
+CREATE TABLE IF NOT EXISTS video_frames (
+  id UUID PRIMARY KEY,
+  channel_id VARCHAR(255) NOT NULL,
+  captured_at TIMESTAMPTZ NOT NULL,
+  image_path TEXT NOT NULL,
+  embedding VECTOR(1536) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_video_frames_channel_captured
+  ON video_frames (channel_id, captured_at DESC);
+CREATE INDEX IF NOT EXISTS idx_video_frames_embedding
+  ON video_frames USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+

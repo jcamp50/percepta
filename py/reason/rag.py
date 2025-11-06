@@ -13,6 +13,7 @@ from openai import APIConnectionError, APIError, APITimeoutError, OpenAI, RateLi
 
 from py.config import settings
 from py.memory.vector_store import VectorStore
+from py.memory.video_store import VideoStore
 from py.utils.embeddings import embed_text
 from .retriever import Retriever, RetrievalParams
 
@@ -47,6 +48,7 @@ class RAGService:
         self,
         *,
         vector_store: Optional[VectorStore] = None,
+        video_store: Optional[VideoStore] = None,
         openai_client: Optional[OpenAI] = None,
         context_char_limit: Optional[int] = None,
         completion_model: Optional[str] = None,
@@ -60,7 +62,10 @@ class RAGService:
         user_prompt_template: Optional[str] = None,
     ) -> None:
         self.vector_store = vector_store or VectorStore()
-        self.retriever = Retriever(vector_store=self.vector_store)
+        self.video_store = video_store
+        self.retriever = Retriever(
+            vector_store=self.vector_store, video_store=self.video_store
+        )
         self.context_char_limit = context_char_limit or getattr(
             settings, "rag_context_char_limit", DEFAULT_CONTEXT_CHAR_LIMIT
         )

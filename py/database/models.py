@@ -90,3 +90,26 @@ class ChannelSnapshot(Base):
             postgresql_ops={"embedding": "vector_cosine_ops"},
         ),
     )
+
+
+class VideoFrame(Base):
+    __tablename__ = "video_frames"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    channel_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    image_path: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding: Mapped[List[float]] = mapped_column(Vector(1536), nullable=False)
+
+    __table_args__ = (
+        Index("idx_video_frames_channel_captured", "channel_id", "captured_at"),
+        Index(
+            "idx_video_frames_embedding",
+            "embedding",
+            postgresql_using="ivfflat",
+            postgresql_with={"lists": 100},
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
