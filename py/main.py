@@ -43,6 +43,7 @@ from py.ingest.metadata import ChannelMetadataPoller
 from py.ingest.event_handler import EventHandler
 from py.memory.vector_store import VectorStore
 from py.memory.video_store import VideoStore
+from py.memory.chat_store import ChatStore
 from py.memory.redis_session import RedisSessionManager
 from py.utils.embeddings import embed_text
 from py.utils.logging import get_logger
@@ -180,10 +181,18 @@ except Exception as exc:
     logger.warning("Video store unavailable: %s", exc)
     video_store = None
 
+# Initialize chat store for chat message storage
+try:
+    chat_store: Optional[ChatStore] = ChatStore()
+    logger.info("Chat store initialized")
+except Exception as exc:
+    logger.warning("Chat store unavailable: %s", exc)
+    chat_store = None
+
 # Initialize RAG service (after stores are initialized)
 try:
     rag_service: Optional[RAGService] = RAGService(
-        vector_store=vector_store, video_store=video_store
+        vector_store=vector_store, video_store=video_store, chat_store=chat_store
     )
 except ValueError as exc:
     logger.warning("RAG service unavailable: %s", exc)
@@ -315,6 +324,39 @@ async def receive_message(message: ChatMessage):
         chat_logger.debug(
             f"Received @mention from {message.username} in #{message.channel}: {message.message}"
         )
+
+    # Store chat message with embedding (if chat_store is available)
+    if chat_store is not None:
+        try:
+            # Convert channel name to broadcaster ID (same pattern as transcripts)
+            channel_broadcaster_id = message.channel
+            broadcaster_id = await get_broadcaster_id_from_channel_name(message.channel)
+            if broadcaster_id:
+                channel_broadcaster_id = broadcaster_id
+
+            # Generate embedding for message
+            embedding = await embed_text(message.message)
+
+            # Ensure timestamp is timezone-aware (UTC)
+            sent_at = message.timestamp
+            if sent_at.tzinfo is None:
+                from datetime import timezone
+                sent_at = sent_at.replace(tzinfo=timezone.utc)
+
+            # Store message in chat_store
+            await chat_store.insert_message(
+                channel_id=channel_broadcaster_id,
+                username=message.username,
+                message=message.message,
+                sent_at=sent_at,
+                embedding=embedding,
+            )
+        except Exception as store_exc:
+            # Log error but don't fail the request (graceful degradation)
+            chat_logger.warning(
+                f"Failed to store chat message from {message.username} in {message.channel}: {store_exc}",
+                exc_info=True,
+            )
 
     # Check for admin commands first (!pause, !resume, !status)
     admin_response = await handle_admin_command(message)

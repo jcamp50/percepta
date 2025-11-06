@@ -6,6 +6,7 @@ from typing import List, Optional
 
 from py.memory.vector_store import VectorStore
 from py.memory.video_store import VideoStore
+from py.memory.chat_store import ChatStore
 from .interfaces import SearchResult
 
 
@@ -18,16 +19,18 @@ class RetrievalParams:
 
 
 class Retriever:
-    """Abstraction over multiple stores. Currently transcripts, events, and video frames."""
+    """Abstraction over multiple stores. Currently transcripts, events, video frames, and chat messages."""
 
     def __init__(
         self,
         *,
         vector_store: Optional[VectorStore] = None,
         video_store: Optional[VideoStore] = None,
+        chat_store: Optional[ChatStore] = None,
     ) -> None:
         self.vector_store = vector_store or VectorStore()
         self.video_store = video_store
+        self.chat_store = chat_store
 
     async def from_transcripts(
         self, *, query_embedding: List[float], params: RetrievalParams
@@ -111,11 +114,42 @@ class Retriever:
             for r in rows
         ]
 
+    async def from_chat_messages(
+        self, *, query_embedding: List[float], params: RetrievalParams
+    ) -> List[SearchResult]:
+        """
+        Retrieve chat messages using vector similarity with time-decay scoring.
+
+        Chat messages use the same timestamp for started_at and ended_at (point-in-time).
+        """
+        if self.chat_store is None:
+            return []
+
+        rows = await self.chat_store.search_messages(
+            query_embedding=query_embedding,
+            limit=params.limit,
+            half_life_minutes=params.half_life_minutes,
+            channel_id=params.channel_id,
+            prefilter_limit=params.prefilter_limit,
+        )
+        return [
+            SearchResult(
+                id=r["id"],
+                channel_id=r["channel_id"],
+                text=f"[Chat] {r['username']}: {r['message']}",  # Include username in text representation
+                started_at=r["sent_at"],  # Use sent_at for both
+                ended_at=r["sent_at"],  # Messages are point-in-time
+                cosine_distance=float(r["cosine_distance"]),
+                score=float(r["score"]),
+            )
+            for r in rows
+        ]
+
     async def retrieve_combined(
         self, *, query_embedding: List[float], params: RetrievalParams
     ) -> List[SearchResult]:
         """
-        Retrieve from transcripts, events, and video frames in parallel, then merge results.
+        Retrieve from transcripts, events, video frames, and chat messages in parallel, then merge results.
 
         Results are ranked by time-decay adjusted score across all sources.
         """
@@ -129,6 +163,12 @@ class Retriever:
         if self.video_store is not None:
             coroutines.append(
                 self.from_video_frames(query_embedding=query_embedding, params=params)
+            )
+
+        # Add chat messages if chat_store is available
+        if self.chat_store is not None:
+            coroutines.append(
+                self.from_chat_messages(query_embedding=query_embedding, params=params)
             )
 
         # Query all sources in parallel

@@ -67,3 +67,17 @@ CREATE INDEX IF NOT EXISTS idx_video_frames_channel_captured
 CREATE INDEX IF NOT EXISTS idx_video_frames_embedding
   ON video_frames USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 
+-- Chat messages: viewer messages from Twitch chat
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id UUID PRIMARY KEY,
+  channel_id VARCHAR(255) NOT NULL,
+  username VARCHAR(255) NOT NULL,
+  message TEXT NOT NULL,
+  sent_at TIMESTAMPTZ NOT NULL,
+  embedding VECTOR(1536) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_channel_sent
+  ON chat_messages (channel_id, sent_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_embedding
+  ON chat_messages USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+
