@@ -9,6 +9,7 @@
  * Available log categories:
  * - 'audio': Audio capture and processing
  * - 'video': Video frame capture and processing
+ * - 'video_description': Visual description generation pipeline
  * - 'stream': Stream management and monitoring
  * - 'chat': Chat message handling
  * - 'system': System-level logs (default)
@@ -103,7 +104,12 @@ function info(message, category = null) {
   if (!shouldLog(LOG_LEVELS.INFO, category)) {
     return;
   }
-  console.log(`${colors.dim}[${getTimestamp()}] INFO: ${message}${colors.reset}`);
+  const logMessage = `${colors.dim}[${getTimestamp()}] INFO: ${message}${colors.reset}`;
+  console.log(logMessage);
+  // Force flush on Windows to ensure logs appear immediately
+  if (process.platform === 'win32' && process.stdout.isTTY) {
+    process.stdout.write('', () => {}); // Force flush
+  }
 }
 
 /**
@@ -127,7 +133,12 @@ function error(message, category = null) {
   if (!shouldLog(LOG_LEVELS.ERROR, category)) {
     return;
   }
-  console.log(`${colors.red}[${getTimestamp()}] ✗ ERROR: ${message}${colors.reset}`);
+  const logMessage = `${colors.red}[${getTimestamp()}] ✗ ERROR: ${message}${colors.reset}`;
+  console.error(logMessage);
+  // Force flush on Windows to ensure logs appear immediately
+  if (process.platform === 'win32' && process.stderr.isTTY) {
+    process.stderr.write('', () => {}); // Force flush
+  }
 }
 
 /**
@@ -139,7 +150,12 @@ function warn(message, category = null) {
   if (!shouldLog(LOG_LEVELS.WARN, category)) {
     return;
   }
-  console.log(`${colors.yellow}[${getTimestamp()}] ⚠ WARN: ${message}${colors.reset}`);
+  const logMessage = `${colors.yellow}[${getTimestamp()}] ⚠ WARN: ${message}${colors.reset}`;
+  console.log(logMessage);
+  // Force flush on Windows to ensure logs appear immediately
+  if (process.platform === 'win32' && process.stdout.isTTY) {
+    process.stdout.write('', () => {}); // Force flush
+  }
 }
 
 /**

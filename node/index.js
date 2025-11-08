@@ -138,11 +138,20 @@ async function main() {
 
       // Initialize video capture with stream manager
       try {
+        const baselineInterval = parseInt(process.env.VIDEO_CAPTURE_BASELINE_INTERVAL || '10', 10);
+        const activeInterval = parseInt(process.env.VIDEO_CAPTURE_ACTIVE_INTERVAL || '5', 10);
+        const initialInterval = parseInt(
+          process.env.VIDEO_FRAME_INTERVAL || String(baselineInterval),
+          10
+        );
+
         videoCapture = new VideoCapture({
           channel: process.env.TARGET_CHANNEL,
           pythonServiceUrl: process.env.PYTHON_SERVICE_URL,
           streamManager: streamManager,
-          frameInterval: parseInt(process.env.VIDEO_FRAME_INTERVAL || '2', 10),
+          baselineInterval,
+          activeInterval,
+          frameInterval: initialInterval,
         });
 
         await videoCapture.initialize();
@@ -239,6 +248,25 @@ async function shutdown() {
 // - process.on('SIGTERM', ...) - Kill signal
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
+
+// Handle unhandled promise rejections to prevent silent failures
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error(`Unhandled Promise Rejection: ${reason}`, 'system');
+  if (reason instanceof Error) {
+    logger.error(`Stack: ${reason.stack}`, 'system');
+  }
+  // Don't exit - log and continue, but this helps debug issues
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  logger.error(`Uncaught Exception: ${error.message}`, 'system');
+  logger.error(`Stack: ${error.stack}`, 'system');
+  // Exit on uncaught exceptions as they indicate serious problems
+  shutdown().then(() => {
+    process.exit(1);
+  });
+});
 
 // Start the application
 main();

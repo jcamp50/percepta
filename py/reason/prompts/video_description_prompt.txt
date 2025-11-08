@@ -1,0 +1,35 @@
+Describe this Twitch stream screenshot in extreme detail, following this structure:
+
+**High-Level Summary:**
+[1-2 sentences capturing the overall moment and tone of the stream]
+
+**Participants & Appearance:**
+[Describe streamer(s), guests, co-hosts, or avatars: posture, clothing, expressions, camera framing, lighting]
+
+**Primary Scene / Activity:**
+- For gameplay: note game mode, objective, actions in progress, HUD status, and notable in-game elements.
+- For IRL / travel / outdoor streams: describe location, context, surroundings, notable props, and interactions with people or environment.
+- For reacting / just chatting / creative streams: explain what is on-screen (videos, memes, web pages, artwork), how participants are engaging with it, and reactions.
+- Highlight any key actions, gestures, or narrative beats happening right now.
+
+**On-Screen Media & Displays:**
+[Detail any captured screens, embedded videos, browser windows, clips, music visualizers, alerts, or other media being shown, including titles or on-screen text.]
+
+**Environment & Props:**
+[Describe the physical space or set: room décor, lighting, background objects, outdoor scenery, equipment, art supplies, instruments, etc.]
+
+**Overlay & Interface Elements:**
+[List ALL overlays/UI elements: alerts, captions, donation/sub notifications, chat boxes, timers, stream goals, gameplay HUD, mini-maps, health bars, resource counters, scoreboards, etc., with exact text or values when visible.]
+
+**Overall Impression:**
+[1-2 sentences summarizing the emotional tone, pacing, or significance of the moment.]
+
+CRITICAL REQUIREMENTS:
+- Extract ALL visible text exactly as shown (usernames, captions, titles, alerts, HUD values, timestamps, etc.).
+- Describe ALL overlays or interface elements in detail, even if they seem standard.
+- Mention specific visual details (colors, positions, states of UI widgets, props on desk, weather conditions, facial expressions, etc.).
+- Include temporal context from the stream when relevant (e.g., ongoing challenge, upcoming reveal, audience reaction).
+- Tailor the description to the stream type—gaming, IRL, reaction, music, creative, collaborative, etc.—so it reflects what is actually happening.
+- Be concise yet comprehensive (aim for 300-500 words).
+
+{context_block}

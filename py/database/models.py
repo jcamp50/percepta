@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Index, Integer, String, Text
+from sqlalchemy import ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql.sqltypes import TIMESTAMP
@@ -102,9 +102,23 @@ class VideoFrame(Base):
     )
     image_path: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[List[float]] = mapped_column(Vector(1536), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    description_source: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True
+    )
+    frame_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    transcript_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("transcripts.id"), nullable=True
+    )
+    aligned_chat_ids: Mapped[Optional[List[str]]] = mapped_column(
+        ARRAY(String), nullable=True
+    )
+    metadata_snapshot: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
 
     __table_args__ = (
         Index("idx_video_frames_channel_captured", "channel_id", "captured_at"),
+        Index("idx_video_frames_hash", "frame_hash"),
+        Index("idx_video_frames_description_source", "channel_id", "description_source"),
         Index(
             "idx_video_frames_embedding",
             "embedding",

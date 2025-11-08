@@ -72,6 +72,10 @@ class ChatClient {
       connection: {
         reconnect: true,
         secure: true,
+        maxReconnectAttempts: Infinity, // Keep trying to reconnect indefinitely
+        reconnectDelay: 1000, // Wait 1 second between reconnection attempts
+        reconnectInterval: 30000, // Check connection every 30 seconds
+        timeout: 30000, // 30 second timeout for connection attempts
       },
     });
     // TODO: Call this._setupEventHandlers()

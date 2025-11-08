@@ -116,7 +116,17 @@ class StreamManager extends EventEmitter {
         `${this.pythonServiceUrl}/api/get-broadcaster-id`,
         {
           params: { channel_name: channelId },
-          timeout: 5000,
+          timeout: 15000, // Increased from 5s to 15s for better reliability
+          httpAgent: new (require('http').Agent)({
+            keepAlive: true,
+            keepAliveMsecs: 30000, // Keep connections alive for 30 seconds
+            timeout: 15000,
+          }),
+          httpsAgent: new (require('https').Agent)({
+            keepAlive: true,
+            keepAliveMsecs: 30000,
+            timeout: 15000,
+          }),
         }
       );
 
@@ -196,7 +206,17 @@ class StreamManager extends EventEmitter {
           params: {
             channel_id: channelId,
           },
-          timeout: 10000, // 10 second timeout
+          timeout: 30000, // Increased from 10s to 30s for better reliability
+          httpAgent: new (require('http').Agent)({
+            keepAlive: true,
+            keepAliveMsecs: 30000,
+            timeout: 30000,
+          }),
+          httpsAgent: new (require('https').Agent)({
+            keepAlive: true,
+            keepAliveMsecs: 30000,
+            timeout: 30000,
+          }),
         }
       );
 

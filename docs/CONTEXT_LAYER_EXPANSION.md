@@ -529,6 +529,563 @@ class ContinualGrounding:
 
 ---
 
+### 1.6. Visual Description Generation (MVP Solution)
+
+**Priority**: High  
+**Effort**: Medium  
+**Impact**: High
+
+#### The Visual Information Gap
+
+**Problem Identified**: While CLIP embeddings enable semantic search for video frames, the LLM cannot "see" what's actually in the image. Current implementation only provides:
+- File path (`frames/channel123/uuid.jpg`)
+- Temporally-aligned transcript text
+- Temporally-aligned chat messages
+- Metadata snapshots
+
+**Missing**: Explicit visual description of what's on screen (UI elements, gameplay state, visual details, on-screen text, etc.)
+
+**Impact**: LLM cannot answer visual questions like "What's on screen right now?" or "What UI elements are visible?" without explicit visual descriptions.
+
+#### MVP Solution: GPT-4o-mini Vision API with Hybrid Lazy/Cached Generation
+
+**Selected Approach**: Generate high-detail visual descriptions using GPT-4o-mini Vision API with cost-optimized hybrid strategy.
+
+**Key Decisions**:
+1. **Model**: GPT-4o-mini Vision API (cheapest option with high quality)
+2. **Capture Interval**: Adaptive 5-10 seconds (reduces cost by 60-80%)
+3. **Generation Strategy**: Hybrid lazy + cached + immediate
+4. **Temporal Continuity**: Include previous frame descriptions for visual continuity
+5. **Summarization Requirement**: All lazy frames must have descriptions before 2-minute summarization jobs
+
+#### Cost Analysis
+
+**GPT-4o-mini Vision API Pricing**:
+- Input: $0.150 per 1M tokens
+- Output: $0.600 per 1M tokens
+- Image tokenization: ~170 tokens per 720p frame
+- Prompt tokens: ~100-200 tokens (with context)
+- Description tokens: ~200-300 tokens (high detail)
+
+**Cost Per Description**:
+- Input: 270 tokens × $0.150/1M = $0.0000405
+- Output: 250 tokens × $0.600/1M = $0.00015
+- **Total**: ~$0.00019 per frame
+
+**Cost Scenarios**:
+
+| Interval | Frames/Hour | Cost/Hour | Cost/10hr Stream |
+|----------|-------------|-----------|------------------|
+| 2 seconds | 1,800 | $0.342 | $3.42 |
+| 5 seconds | 720 | $0.137 | $1.37 |
+| 10 seconds | 360 | $0.068 | $0.68 |
+| Adaptive (5-10s) | ~540 | ~$0.103 | ~$1.03 |
+
+**MVP Target**: Adaptive 5-10 second intervals = **~$1.00 per 10-hour stream**
+
+#### Implementation Strategy
+
+**Hybrid Generation Approach**:
+
+```python
+# py/memory/video_store.py
+class VideoStore:
+    async def insert_frame(
+        self,
+        channel_id: str,
+        image_path: str,
+        captured_at: datetime,
+        embedding: Optional[List[float]] = None,
+    ) -> str:
+        """
+        Insert frame with hybrid description generation strategy.
+        
+        Strategy:
+        1. Check cache for similar frames (perceptual hash)
+        2. Generate immediately for "interesting" frames (high activity)
+        3. Mark others as "lazy" (generate on-demand or before summarization)
+        """
+        frame_hash = self._compute_perceptual_hash(image_path)
+        
+        # 1. Check cache for similar frame (within last 60 seconds)
+        similar_frame = await self._find_similar_frame(
+            channel_id, frame_hash, window_seconds=60
+        )
+        
+        if similar_frame and similar_frame.description:
+            # Reuse description (with minor timestamp update if needed)
+            description = similar_frame.description
+            description_source = "cache"
+        else:
+            # 2. Determine if frame is "interesting" (high activity)
+            is_interesting = await self._is_interesting_frame(
+                channel_id, captured_at
+            )
+            
+            if is_interesting:
+                # Generate immediately
+                description = await self._generate_description(
+                    image_path, channel_id, captured_at
+                )
+                description_source = "immediate"
+            else:
+                # Mark as lazy (will generate before summarization)
+                description = None
+                description_source = "lazy"
+        
+        # Store frame
+        frame_id = await self._insert_frame_with_description(
+            channel_id=channel_id,
+            image_path=image_path,
+            captured_at=captured_at,
+            embedding=embedding,
+            description=description,
+            description_source=description_source,
+            frame_hash=frame_hash,
+        )
+        
+        # 3. Background job: Generate descriptions for lazy frames
+        if description_source == "lazy":
+            asyncio.create_task(
+                self._background_description_generation(frame_id)
+            )
+        
+        return frame_id
+```
+
+**Description Generation with Temporal Context**:
+
+```python
+# py/utils/video_descriptions.py
+async def generate_frame_description(
+    image_path: str,
+    channel_id: str,
+    captured_at: datetime,
+    previous_frame_description: Optional[str] = None,
+    recent_summary: Optional[str] = None,
+    transcript: Optional[dict] = None,
+    chat: Optional[List[dict]] = None,
+    metadata: Optional[dict] = None,
+) -> str:
+    """
+    Generate high-detail visual description using GPT-4o-mini Vision API.
+    
+    Includes temporal context for visual continuity and grounding.
+    """
+    from openai import OpenAI
+    from base64 import b64encode
+    
+    client = OpenAI(api_key=settings.openai_api_key)
+    
+    # Load and encode image
+    with open(image_path, "rb") as image_file:
+        base64_image = b64encode(image_file.read()).decode("utf-8")
+    
+    # Build contextual prompt
+    prompt = _build_description_prompt(
+        previous_frame_description=previous_frame_description,
+        recent_summary=recent_summary,
+        transcript=transcript,
+        chat=chat,
+        metadata=metadata,
+    )
+    
+    # Call Vision API
+    response = await asyncio.to_thread(
+        client.chat.completions.create,
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{base64_image}"
+                        },
+                    },
+                ],
+            }
+        ],
+        max_tokens=500,  # Allow detailed descriptions
+    )
+    
+    return response.choices[0].message.content
+
+
+def _build_description_prompt(
+    previous_frame_description: Optional[str] = None,
+    recent_summary: Optional[str] = None,
+    transcript: Optional[dict] = None,
+    chat: Optional[List[dict]] = None,
+    metadata: Optional[dict] = None,
+) -> str:
+    """
+    Build structured prompt for high-detail visual descriptions.
+    
+    Enforces format similar to example:
+    - High-level description
+    - Detailed visual breakdown
+    - On-screen interface elements
+    - Overall impression
+    """
+    context_parts = []
+    
+    # Visual continuity
+    if previous_frame_description:
+        context_parts.append(
+            f"Previous frame context: {previous_frame_description[:200]}"
+        )
+    
+    # Recent stream summary
+    if recent_summary:
+        context_parts.append(f"Recent stream summary: {recent_summary[:300]}")
+    
+    # Temporal alignment
+    if transcript:
+        context_parts.append(
+            f"Streamer is saying: \"{transcript['text'][:200]}\""
+        )
+    
+    if chat:
+        chat_lines = [
+            f"{c['username']}: {c['message']}" for c in chat[:5]
+        ]
+        context_parts.append(f"Chat discussion: {' | '.join(chat_lines)}")
+    
+    if metadata:
+        context_parts.append(
+            f"Game: {metadata.get('game_name', 'Unknown')} | "
+            f"Title: {metadata.get('title', 'Unknown')}"
+        )
+    
+    # Main instruction with format enforcement
+    prompt = f"""Describe this Twitch stream screenshot in extreme detail, following this exact format:
+
+**High-Level Description:**
+[1-2 sentences summarizing the overall scene]
+
+**Detailed Visual Description:**
+
+1. **Streamer's Webcam Feed (if visible):**
+   [Describe streamer appearance, clothing, expression, background, lighting]
+
+2. **Main Gameplay View:**
+   - **Perspective:** [First-person/Third-person/Top-down/etc.]
+   - **Player Character:** [Appearance, equipment, position, actions]
+   - **Environment - Foreground:** [Immediate surroundings, objects, surfaces]
+   - **Environment - Midground:** [Buildings, structures, terrain]
+   - **Environment - Background:** [Distant elements, sky, horizon]
+   - **Lighting:** [Time of day, lighting conditions]
+
+3. **On-Screen Interface and Overlays:**
+   - **[Element Name]:** [Exact text, values, position]
+   [List ALL UI elements: health bars, ammo counts, minimaps, chat overlays, etc.]
+   - **Text Elements:** [Extract ALL visible text with exact wording]
+   - **Icons/Symbols:** [Describe all icons, indicators, status symbols]
+
+**Overall Impression:**
+[1-2 sentences about the scene's significance or atmosphere]
+
+CRITICAL REQUIREMENTS:
+- Extract ALL visible text exactly as shown (weapon names, ammo counts, usernames, etc.)
+- Describe ALL UI elements in detail (health bars, compass, chat messages, etc.)
+- Mention specific visual details (colors, positions, states)
+- Include temporal context from the stream when relevant
+- Be concise but comprehensive (aim for 300-500 words)
+
+{f'CONTEXT: {chr(10).join(context_parts)}' if context_parts else ''}"""
+
+    return prompt
+```
+
+**Adaptive Capture Interval**:
+
+```python
+# py/ingest/video.py
+async def determine_capture_interval(
+    channel_id: str,
+    current_time: datetime,
+) -> int:
+    """
+    Determine adaptive capture interval based on stream activity.
+    
+    Returns: Interval in seconds (5-10)
+    """
+    # Check recent activity indicators
+    recent_chat_count = await chat_store.count_recent_messages(
+        channel_id, window_seconds=30
+    )
+    recent_transcript_activity = await vector_store.check_recent_activity(
+        channel_id, window_seconds=30
+    )
+    
+    # High activity: capture more frequently
+    if recent_chat_count > 50 or recent_transcript_activity:
+        return 5  # seconds
+    
+    # Normal activity: standard interval
+    return 10  # seconds
+```
+
+**Summarization Requirement: Pre-Generate Lazy Descriptions**:
+
+```python
+# py/memory/summarizer.py
+async def summarize_segment(
+    self,
+    channel_id: str,
+    start_time: datetime,
+    end_time: datetime,
+) -> str:
+    """
+    Generate summary for 2-minute segment.
+    
+    CRITICAL: All lazy frames in this segment must have descriptions
+    before summarization runs.
+    """
+    # 1. Ensure all lazy frames have descriptions
+    lazy_frames = await video_store.get_lazy_frames_in_range(
+        channel_id, start_time, end_time
+    )
+    
+    if lazy_frames:
+        # Generate descriptions for all lazy frames
+        await asyncio.gather(*[
+            video_store.generate_description_for_frame(frame_id)
+            for frame_id in lazy_frames
+        ])
+    
+    # 2. Retrieve all data for segment
+    transcripts = await vector_store.get_range(channel_id, start_time, end_time)
+    video_frames = await video_store.get_range(channel_id, start_time, end_time)
+    chat_messages = await chat_store.get_range(channel_id, start_time, end_time)
+    
+    # 3. Build context with video frame descriptions
+    context_parts = []
+    
+    # Add transcripts
+    for transcript in transcripts:
+        context_parts.append(f"[{transcript['started_at']}] {transcript['text']}")
+    
+    # Add video frame descriptions (CRITICAL: descriptions now available)
+    for frame in video_frames:
+        if frame['description']:
+            context_parts.append(
+                f"[{frame['captured_at']}] [Video Frame] {frame['description']}"
+            )
+        else:
+            # Fallback: use image path if description missing (shouldn't happen)
+            context_parts.append(
+                f"[{frame['captured_at']}] [Video Frame] {frame['image_path']}"
+            )
+    
+    # Add chat messages
+    for chat in chat_messages:
+        context_parts.append(
+            f"[{chat['sent_at']}] [Chat] {chat['username']}: {chat['message']}"
+        )
+    
+    # 4. Generate summary with full context
+    summary = await self._generate_summary(context_parts)
+    
+    return summary
+```
+
+#### Database Schema Update
+
+```python
+# py/database/models.py
+class VideoFrame(Base):
+    __tablename__ = "video_frames"
+    
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    channel_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    image_path: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding: Mapped[List[float]] = mapped_column(Vector(1536), nullable=False)
+    
+    # Visual description (NEW)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    description_source: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True
+    )  # "immediate", "lazy", "cache"
+    frame_hash: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True
+    )  # Perceptual hash for caching
+    
+    # Temporal alignment (existing)
+    transcript_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("transcripts.id"), nullable=True
+    )
+    aligned_chat_ids: Mapped[Optional[List[str]]] = mapped_column(
+        ARRAY(String), nullable=True
+    )
+    metadata_snapshot: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    
+    __table_args__ = (
+        Index("idx_video_frames_channel_captured", "channel_id", "captured_at"),
+        Index("idx_video_frames_hash", "frame_hash"),  # For cache lookups
+        Index("idx_video_frames_lazy", "channel_id", "description_source"),  # For lazy generation
+        Index(
+            "idx_video_frames_embedding",
+            "embedding",
+            postgresql_using="ivfflat",
+            postgresql_with={"lists": 100},
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
+```
+
+#### Retrieval Integration
+
+```python
+# py/reason/retriever.py
+async def retrieve_video_with_context(
+    self, *, query_embedding: List[float], params: RetrievalParams
+) -> List[SearchResult]:
+    """
+    Retrieve video frames with enriched context including visual descriptions.
+    """
+    rows = await self.video_store.search_frames(
+        query_embedding=query_embedding,
+        limit=params.limit,
+        half_life_minutes=params.half_life_minutes,
+        channel_id=params.channel_id,
+        prefilter_limit=params.prefilter_limit,
+    )
+    
+    enriched_results = []
+    for r in rows:
+        # Build enriched text representation
+        # Use description if available, otherwise fallback to image_path
+        if r.get("description"):
+            text_parts = [f"[Video Frame] {r['description']}"]
+        else:
+            # Generate description on-demand if missing (lazy generation)
+            description = await self.video_store.generate_description_for_frame(
+                r["id"]
+            )
+            text_parts = [f"[Video Frame] {description}"]
+        
+        # Add aligned context (existing)
+        if r.get("transcript_id") and self.vector_store:
+            transcript = await self.vector_store.get_transcript_by_id(
+                r["transcript_id"]
+            )
+            if transcript:
+                text_parts.append(f"Transcript: {transcript['text']}")
+        
+        if r.get("aligned_chat_ids") and self.chat_store:
+            chat_messages = await self.chat_store.get_messages_by_ids(
+                r["aligned_chat_ids"]
+            )
+            if chat_messages:
+                chat_text = " | ".join(
+                    [f"{c['username']}: {c['message']}" for c in chat_messages]
+                )
+                text_parts.append(f"Chat: {chat_text}")
+        
+        if r.get("metadata_snapshot"):
+            metadata = r["metadata_snapshot"]
+            metadata_parts = []
+            if metadata.get("game_name"):
+                metadata_parts.append(f"Game: {metadata['game_name']}")
+            if metadata.get("title"):
+                metadata_parts.append(f"Title: {metadata['title']}")
+            if metadata_parts:
+                text_parts.append(f"Metadata: {' | '.join(metadata_parts)}")
+        
+        enriched_text = " | ".join(text_parts)
+        
+        enriched_results.append(
+            SearchResult(
+                id=r["id"],
+                channel_id=r["channel_id"],
+                text=enriched_text,
+                started_at=r["captured_at"],
+                ended_at=r["captured_at"],
+                cosine_distance=float(r["cosine_distance"]),
+                score=float(r["score"]),
+            )
+        )
+    
+    return enriched_results
+```
+
+#### Tradeoffs and Considerations
+
+**Advantages**:
+- ✅ **Solves Visual Gap**: LLM can now "see" what's on screen
+- ✅ **Cost-Effective**: ~$1.00 per 10-hour stream with adaptive intervals
+- ✅ **High Quality**: GPT-4o-mini provides detailed, structured descriptions
+- ✅ **Temporal Continuity**: Previous frame descriptions enable visual flow understanding
+- ✅ **Flexible**: Hybrid approach balances cost and latency
+
+**Challenges**:
+- ⚠️ **Latency**: Lazy generation adds ~1-3s latency on first retrieval
+- ⚠️ **Summarization Dependency**: Must ensure lazy frames have descriptions before summarization
+- ⚠️ **Cache Hit Rate**: Depends on stream content (gaming streams often have similar frames)
+- ⚠️ **API Rate Limits**: Need to handle OpenAI API rate limits gracefully
+
+**Mitigations**:
+- **Background Jobs**: Pre-generate lazy descriptions in background before summarization
+- **Retry Logic**: Implement retry with exponential backoff for API failures
+- **Rate Limiting**: Queue description generation requests to respect API limits
+- **Monitoring**: Track description generation success rate and latency
+
+**Future Enhancements** (Post-MVP):
+- **Local Models**: Consider LLaVA or Qwen-VL for cost reduction at scale
+- **Description Embeddings**: Generate embeddings from descriptions for better text search
+- **Joint Embedding Fusion**: Combine CLIP + description embeddings (JCB-37)
+- **Adaptive Quality**: Use lower detail for similar frames, high detail for unique frames
+
+#### Implementation Checklist
+
+- [ ] **Database Schema**
+  - [ ] Add `description` field to `VideoFrame` model
+  - [ ] Add `description_source` field
+  - [ ] Add `frame_hash` field for caching
+  - [ ] Add indexes for cache lookups and lazy generation queries
+
+- [ ] **Description Generation**
+  - [ ] Create `py/utils/video_descriptions.py` with GPT-4o-mini integration
+  - [ ] Implement `generate_frame_description()` with temporal context
+  - [ ] Implement `_build_description_prompt()` with format enforcement
+  - [ ] Add retry logic and error handling
+
+- [ ] **Hybrid Strategy**
+  - [ ] Implement perceptual hashing for frame similarity
+  - [ ] Implement cache lookup logic
+  - [ ] Implement "interesting frame" detection
+  - [ ] Implement lazy generation background jobs
+
+- [ ] **Adaptive Intervals**
+  - [ ] Implement `determine_capture_interval()` logic
+  - [ ] Update video capture to use adaptive intervals
+
+- [ ] **Summarization Integration**
+  - [ ] Update `summarize_segment()` to pre-generate lazy descriptions
+  - [ ] Ensure all frames have descriptions before summarization
+  - [ ] Include video frame descriptions in summary context
+
+- [ ] **Retrieval Integration**
+  - [ ] Update `retrieve_video_with_context()` to use descriptions
+  - [ ] Implement on-demand generation fallback
+  - [ ] Update prompt templates to include visual descriptions
+
+- [ ] **Testing**
+  - [ ] Test description generation quality
+  - [ ] Test cache hit rates
+  - [ ] Test lazy generation latency
+  - [ ] Test summarization with descriptions
+  - [ ] Measure cost per stream
+
+---
+
 ### 2. Chat Message Embeddings
 
 **Priority**: High  
@@ -1035,11 +1592,20 @@ class ContextIsolator:
 
 ## Cost Considerations
 
-### Video Embeddings
+### Video Frame Embeddings (CLIP)
 
 - **Local CLIP**: Free (GPU required)
-- **OpenAI API**: ~$X per image (if available)
+- **OpenAI API**: Not available (CLIP is local-only)
 - **Recommendation**: Use local CLIP for MVP
+- **Cost**: $0.00 (hardware cost only)
+
+### Video Frame Descriptions (Vision API)
+
+- **GPT-4o-mini Vision**: $0.150 per 1M input tokens, $0.600 per 1M output tokens
+- **Per Frame**: ~$0.00019 (270 input + 250 output tokens)
+- **With Adaptive Intervals (5-10s)**: ~540 frames/hour
+- **Cost**: ~$0.103 per hour = **~$1.03 per 10-hour stream**
+- **With Hybrid Strategy**: Additional 30-50% reduction via caching = **~$0.50-$0.70 per 10-hour stream**
 
 ### Chat Embeddings
 
@@ -1053,12 +1619,36 @@ class ContextIsolator:
 - **Estimate**: ~30 summaries/hour × 500 tokens = 15K tokens/hour
 - **Cost**: ~$0.002 per hour (very low)
 
-### Total Cost Estimate
+### Total Cost Estimate (MVP)
 
-- **Current**: ~$0.01 per hour (audio embeddings + LLM)
-- **With Video**: ~$0.01 per hour (local CLIP)
-- **With Summarization**: ~$0.012 per hour
-- **Total**: ~$0.12 per 10-hour stream
+- **Current (Audio Only)**: ~$0.01 per hour (audio embeddings + LLM)
+- **With Video Frames (CLIP)**: ~$0.01 per hour (local CLIP, no API cost)
+- **With Video Descriptions**: ~$0.103 per hour (GPT-4o-mini Vision API)
+- **With Summarization**: ~$0.105 per hour
+- **Total**: **~$1.05 per 10-hour stream** (with hybrid caching: **~$0.50-$0.70 per 10-hour stream**)
+
+### Cost Optimization Strategies
+
+1. **Adaptive Capture Intervals**: Reduces frames by 60-80% (5-10s vs 2s)
+2. **Hybrid Lazy/Cached Generation**: 
+   - Cache hits: 30% of frames (free)
+   - Immediate generation: 20% of frames (high activity)
+   - Lazy generation: 50% of frames (on-demand or before summarization)
+3. **Perceptual Hashing**: Detect similar frames and reuse descriptions
+4. **Background Jobs**: Pre-generate lazy descriptions before summarization (avoids latency)
+
+### Cost Comparison
+
+| Approach | Cost/Hour | Cost/10hr | Notes |
+|----------|-----------|-----------|-------|
+| GPT-4o (2s interval) | $57.24 | $572.40 | Too expensive for MVP |
+| GPT-4o-mini (2s interval) | $0.342 | $3.42 | Baseline |
+| GPT-4o-mini (10s interval) | $0.068 | $0.68 | Fixed interval |
+| GPT-4o-mini (adaptive 5-10s) | $0.103 | $1.03 | Activity-based |
+| GPT-4o-mini (hybrid lazy/cached) | $0.05-$0.07 | $0.50-$0.70 | **MVP Recommended** |
+| Local LLaVA/Qwen-VL | $0.00* | $0.00* | *After hardware purchase ($1,500-$3,000) |
+
+**MVP Recommendation**: GPT-4o-mini with adaptive intervals and hybrid lazy/cached generation = **~$0.50-$0.70 per 10-hour stream**
 
 ---
 
@@ -1072,7 +1662,14 @@ class ContextIsolator:
 
 ---
 
-**Document Version**: 1.0  
+**Document Version**: 2.0  
 **Last Updated**: 2025-01-30  
-**Related Documents**: `docs/LONG_TERM_CONTEXT_RESEARCH.md`, `docs/ARCHITECTURE.md`
+**Related Documents**: `docs/LONG_TERM_CONTEXT_RESEARCH.md`, `docs/CONTEXT_RESEARCH_SUMMARY.md`, `docs/ARCHITECTURE.md`
+
+**Major Updates (v2.0)**:
+- Added Section 1.6: Visual Description Generation (MVP Solution)
+- Documented GPT-4o-mini Vision API approach with hybrid lazy/cached generation
+- Updated cost analysis with detailed breakdown
+- Added implementation details for adaptive intervals and summarization integration
+- Documented tradeoffs and future enhancements
 

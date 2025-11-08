@@ -83,17 +83,112 @@ class Retriever:
             for r in rows
         ]
 
-    async def from_video_frames(
+    async def retrieve_video_with_context(
         self, *, query_embedding: List[float], params: RetrievalParams
+    ) -> List[SearchResult]:
+        """
+        Retrieve video frames with enriched context (transcripts, chat, metadata).
+        
+        Enriches video frame results with temporally-aligned context from transcripts,
+        chat messages, and metadata snapshots.
+        """
+        if self.video_store is None:
+            return []
+
+        rows = await self.video_store.search_frames(
+            query_embedding=query_embedding,
+            limit=params.limit,
+            half_life_minutes=params.half_life_minutes,
+            channel_id=params.channel_id,
+            prefilter_limit=params.prefilter_limit,
+        )
+        
+        enriched_results = []
+        for r in rows:
+            # Build enriched text representation
+            description = None
+            if hasattr(r, "get"):
+                description = r.get("description")
+            else:
+                description = r["description"] if "description" in r.keys() else None
+
+            # Prefer visual description (JCB-41), fall back to image path
+            if description:
+                text_parts = [f"[Video Frame] {description}"]
+            else:
+                text_parts = [f"[Video Frame] {r['image_path']}"]
+            
+            # Add transcript text if available
+            transcript_text = None
+            if r.get("transcript_id") and self.vector_store:
+                try:
+                    transcript = await self.vector_store.get_transcript_by_id(r["transcript_id"])
+                    if transcript:
+                        transcript_text = transcript["text"]
+                        text_parts.append(f"Transcript: {transcript_text}")
+                except Exception:
+                    # Log but don't fail if transcript retrieval fails
+                    pass
+            
+            # Add chat messages if available
+            chat_messages = []
+            if r.get("aligned_chat_ids") and self.chat_store:
+                try:
+                    chat_messages = await self.chat_store.get_messages_by_ids(r["aligned_chat_ids"])
+                    if chat_messages:
+                        chat_text = " | ".join([f"{c['username']}: {c['message']}" for c in chat_messages])
+                        text_parts.append(f"Chat: {chat_text}")
+                except Exception:
+                    # Log but don't fail if chat retrieval fails
+                    pass
+            
+            # Add metadata if available
+            metadata = r.get("metadata_snapshot")
+            if metadata:
+                metadata_parts = []
+                if metadata.get("game_name"):
+                    metadata_parts.append(f"Game: {metadata['game_name']}")
+                if metadata.get("title"):
+                    metadata_parts.append(f"Title: {metadata['title']}")
+                if metadata_parts:
+                    text_parts.append(f"Metadata: {' | '.join(metadata_parts)}")
+            
+            enriched_text = " | ".join(text_parts)
+            
+            enriched_results.append(
+                SearchResult(
+                    id=r["id"],
+                    channel_id=r["channel_id"],
+                    text=enriched_text,
+                    started_at=r["captured_at"],
+                    ended_at=r["captured_at"],
+                    cosine_distance=float(r["cosine_distance"]),
+                    score=float(r["score"]),
+                )
+            )
+        
+        return enriched_results
+
+    async def from_video_frames(
+        self, *, query_embedding: List[float], params: RetrievalParams, include_context: bool = True
     ) -> List[SearchResult]:
         """
         Retrieve video frames using vector similarity with time-decay scoring.
 
         Video frames use the same timestamp for started_at and ended_at (point-in-time).
+        
+        Args:
+            include_context: If True, enrich results with aligned transcripts, chat, and metadata
         """
         if self.video_store is None:
             return []
 
+        if include_context:
+            return await self.retrieve_video_with_context(
+                query_embedding=query_embedding, params=params
+            )
+        
+        # Fallback to basic retrieval without context enrichment
         rows = await self.video_store.search_frames(
             query_embedding=query_embedding,
             limit=params.limit,

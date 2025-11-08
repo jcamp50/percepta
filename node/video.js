@@ -42,14 +42,34 @@ class VideoCapture {
       throw new Error('StreamManager is required for video capture');
     }
     
-    this.frameInterval = config.frameInterval || 2; // Default: 2 seconds
+    this.baselineInterval = Math.max(2, Number(config.baselineInterval) || 10);
+    this.activeInterval = Math.max(2, Number(config.activeInterval) || 5);
+    this.frameInterval = Math.max(
+      2,
+      Number(config.frameInterval) || this.baselineInterval
+    );
+    if (this.frameInterval < this.activeInterval) {
+      this.frameInterval = this.activeInterval;
+    }
 
     this.isCapturing = false;
+    this.isShuttingDown = false; // Flag to prevent new captures during shutdown
     this.ffmpegProcess = null;
     this.frameCaptureInterval = null;
+    this.heartbeatInterval = null;
     this.broadcasterId = null; // Will be set when capture starts
     this.tmpDir = path.join(os.tmpdir(), 'percepta_video');
+    this.framesCaptured = 0; // Counter for periodic summary logs
+    this.framesFailed = 0; // Counter for failed frames
+    this.currentStreamUrl = null;
+    this.currentChannelId = null;
+    this.lastInteresting = false;
     
+    logger.info(
+      `Video capture intervals configured (baseline=${this.baselineInterval}s, active=${this.activeInterval}s, start=${this.frameInterval}s)`,
+      'video_description'
+    );
+
     // Listen to StreamManager events
     this._setupStreamManagerListeners();
   }
@@ -172,35 +192,124 @@ class VideoCapture {
           '-q:v', '2', // High quality JPEG
         ])
         .output(outputPath)
-        .on('end', async () => {
-          try {
-            // Send frame to Python service
-            await this._sendFrameToPython(outputPath, channelId, new Date().toISOString());
+        .on('end', () => {
+          // Use .then().catch() to ensure promise is properly handled
+          this._sendFrameToPython(outputPath, channelId, new Date().toISOString())
+            .then(() => {
             // Clean up temp file after sending
             if (fs.existsSync(outputPath)) {
+                try {
               fs.unlinkSync(outputPath);
+                } catch (unlinkError) {
+                  logger.warn(`Failed to delete temp file: ${unlinkError.message}`, 'video');
+                }
             }
             resolve();
-          } catch (error) {
+            })
+            .catch((error) => {
             logger.error(`Failed to send frame: ${error.message}`, 'video');
+            logger.error(`Frame send error: ${error.message}`, 'video_description');
             // Clean up temp file on error
             if (fs.existsSync(outputPath)) {
+                try {
               fs.unlinkSync(outputPath);
+                } catch (unlinkError) {
+                  logger.warn(`Failed to delete temp file: ${unlinkError.message}`, 'video');
+                }
             }
             reject(error);
-          }
+            });
         })
         .on('error', (err) => {
-          logger.error(`FFmpeg frame capture error: ${err.message}`, 'video');
+          // Don't log errors during shutdown as they're expected (SIGTERM, etc.)
+          if (!this.isShuttingDown) {
+            this.framesFailed++;
+            // Log more details about FFmpeg errors
+            const errorMsg = err.message || 'Unknown FFmpeg error';
+            const exitCode = err.code || 'unknown';
+            logger.error(`FFmpeg frame capture error (code ${exitCode}): ${errorMsg}`, 'video');
+            
+            // Log stderr if available for debugging
+            if (err.stderr) {
+              logger.debug(`FFmpeg stderr: ${err.stderr}`, 'video');
+            }
+            
+            // Don't reject on transient errors - resolve instead to prevent unhandled rejection
+            // FFmpeg code 69 (and other transient errors) might be network/stream issues
+            // that will resolve on the next capture attempt
+            logger.warn(`Skipping frame due to FFmpeg error, will retry on next interval (failed: ${this.framesFailed})`, 'video');
+          }
+          
           // Clean up temp file on error
           if (fs.existsSync(outputPath)) {
+            try {
             fs.unlinkSync(outputPath);
+            } catch (unlinkError) {
+              // Ignore cleanup errors
+            }
           }
-          reject(err);
+          
+          // Always resolve to prevent unhandled rejection, even during shutdown
+          resolve();
         });
 
       ffmpegCmd.run();
     });
+  }
+
+  _createFrameInterval(streamUrl, channelId) {
+    if (this.frameCaptureInterval) {
+      clearInterval(this.frameCaptureInterval);
+      this.frameCaptureInterval = null;
+    }
+    this.currentStreamUrl = null;
+    this.currentChannelId = null;
+
+    const intervalMs = Math.max(2, this.frameInterval) * 1000;
+    this.frameCaptureInterval = setInterval(() => {
+      if (!this.isCapturing || this.isShuttingDown) {
+        return;
+      }
+
+      this._captureFrame(streamUrl, channelId)
+        .then(() => {})
+        .catch((error) => {
+          if (!this.isShuttingDown) {
+            this.framesFailed++;
+            logger.error(`Frame capture error: ${error.message}`, 'video');
+            if (error.stack) {
+              logger.debug(`Frame capture error stack: ${error.stack}`, 'video');
+            }
+          }
+        });
+    }, intervalMs);
+  }
+
+  _updateCaptureInterval(nextIntervalSeconds) {
+    if (!this.isCapturing || !this.currentStreamUrl || !this.currentChannelId) {
+      return;
+    }
+
+    const parsed = Number(nextIntervalSeconds);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return;
+    }
+
+    const sanitized = Math.max(2, Math.round(parsed));
+    if (sanitized === this.frameInterval) {
+      return;
+    }
+
+    this.frameInterval = sanitized;
+    this._createFrameInterval(this.currentStreamUrl, this.currentChannelId);
+    logger.info(
+      `Adjusted video capture interval to ${sanitized}s for ${this.currentChannelId}`,
+      'video'
+    );
+    logger.info(
+      `Video capture interval now ${sanitized}s (channel=${this.currentChannelId})`,
+      'video_description'
+    );
   }
 
   /**
@@ -230,6 +339,8 @@ class VideoCapture {
     });
     form.append('channel_id', broadcasterId);
     form.append('captured_at', capturedAt);
+      const interestingHint = this.frameInterval <= this.activeInterval; 
+    form.append('interesting_hint', interestingHint ? 'true' : 'false');
 
     try {
       const response = await axios.post(
@@ -239,14 +350,49 @@ class VideoCapture {
           headers: form.getHeaders(),
           maxContentLength: Infinity,
           maxBodyLength: Infinity,
-          timeout: 30000, // 30 second timeout for CLIP embedding generation
+          timeout: 60000, // Increased to 60 seconds for CLIP embedding generation
+          httpAgent: new (require('http').Agent)({ 
+            keepAlive: true,
+            keepAliveMsecs: 60000, // Keep connections alive for 60 seconds
+            timeout: 60000,
+          }),
+          httpsAgent: new (require('https').Agent)({ 
+            keepAlive: true,
+            keepAliveMsecs: 60000,
+            timeout: 60000,
+          }),
         }
       );
 
-      logger.debug(
-        `Video frame sent successfully: ${response.data.frame_id}`,
-        'video'
+      this.framesCaptured++;
+      const data = response.data || {};
+      if (typeof data.next_interval_seconds === 'number') {
+        logger.info(
+          `Python recommended capture interval ${data.next_interval_seconds}s (current ${this.frameInterval}s)`,
+          'video_description'
+        );
+        this._updateCaptureInterval(data.next_interval_seconds);
+      }
+      if (typeof data.interesting_frame === 'boolean') {
+        this.lastInteresting = data.interesting_frame;
+      } else {
+        this.lastInteresting = false;
+      }
+
+      const recentChat = data.activity?.recent_chat_count ?? 'n/a';
+      const keywordTrigger = data.activity?.keyword_trigger ? 'yes' : 'no';
+      logger.info(
+        `Frame ${data.frame_id || 'unknown'} stored (source=${data.description_source || 'n/a'}, reused=${data.reused_description ? 'yes' : 'no'}, interesting=${data.interesting_frame ? 'yes' : 'no'}, chat=${recentChat}, keyword=${keywordTrigger})`,
+        'video_description'
       );
+
+      // Log every 10th frame to avoid spam, or always log if frames are failing
+      if (this.framesCaptured % 10 === 0 || this.framesFailed > 0) {
+        logger.info(
+          `Video frame sent successfully: ${data.frame_id || 'no frame_id'} (${channelId}, total: ${this.framesCaptured}, interval: ${this.frameInterval}s)`,
+          'video'
+        );
+      }
     } catch (error) {
       // Log but don't crash - Python service might be down or busy
       logger.warn(
@@ -301,7 +447,7 @@ class VideoCapture {
    */
   async _startCaptureWithUrl(streamUrl, channelId) {
     if (this.isCapturing) {
-      logger.warn('Video capture already in progress', 'video');
+      logger.debug('Video capture already in progress, skipping duplicate start', 'video');
       return;
     }
 
@@ -311,22 +457,29 @@ class VideoCapture {
     }
 
     this.isCapturing = true;
+    this.framesCaptured = 0; // Reset counters
+    this.framesFailed = 0;
+    this.currentStreamUrl = streamUrl;
+    this.currentChannelId = channelId;
+    this.frameInterval = this.baselineInterval;
     logger.info(`Starting video frame capture for channel ${channelId}`, 'video');
 
     try {
-      // Capture frames at regular intervals
-      this.frameCaptureInterval = setInterval(async () => {
-        if (!this.isCapturing) {
-          return;
-        }
+      this._createFrameInterval(streamUrl, channelId);
 
-        try {
-          await this._captureFrame(streamUrl, channelId);
-        } catch (error) {
-          logger.error(`Frame capture error: ${error.message}`, 'video');
-          // Continue capturing even if one frame fails
+      // Add heartbeat logger every 30 seconds to verify service is alive
+      this.heartbeatInterval = setInterval(() => {
+        if (this.isCapturing) {
+          const successRate = this.framesCaptured + this.framesFailed > 0 
+            ? ((this.framesCaptured / (this.framesCaptured + this.framesFailed)) * 100).toFixed(1)
+            : 0;
+          logger.info(
+            `Video capture heartbeat: ${channelId} (active, current interval ${this.frameInterval}s, ` +
+            `captured: ${this.framesCaptured}, failed: ${this.framesFailed}, success rate: ${successRate}%)`,
+            'video'
+          );
         }
-      }, this.frameInterval * 1000); // Convert seconds to milliseconds
+      }, 30000);
 
       // Capture first frame immediately
       await this._captureFrame(streamUrl, channelId);
@@ -346,6 +499,7 @@ class VideoCapture {
       return;
     }
 
+    this.isShuttingDown = true; // Set flag to prevent new captures
     this.isCapturing = false;
     logger.info('Stopping video frame capture', 'video');
 
@@ -354,12 +508,29 @@ class VideoCapture {
       clearInterval(this.frameCaptureInterval);
       this.frameCaptureInterval = null;
     }
+    this.currentStreamUrl = null;
+    this.currentChannelId = null;
+
+    // Clear heartbeat interval
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
 
     // Stop FFmpeg process if running
     if (this.ffmpegProcess) {
+      try {
       this.ffmpegProcess.kill('SIGTERM');
+      } catch (error) {
+        // Ignore errors during shutdown
+      }
       this.ffmpegProcess = null;
     }
+
+    // Wait a moment for any in-flight captures to complete
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    this.frameInterval = this.baselineInterval;
+    this.isShuttingDown = false;
   }
 }
 

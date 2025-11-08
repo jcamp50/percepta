@@ -35,7 +35,7 @@ class ChatStore:
         session_factory: Optional[async_sessionmaker[AsyncSession]] = None,
     ) -> None:
         """Initialize ChatStore.
-        
+
         Args:
             session_factory: Database session factory (defaults to SessionLocal)
         """
@@ -52,19 +52,19 @@ class ChatStore:
         embedding: List[float],
     ) -> str:
         """Insert a chat message into the database.
-        
+
         Args:
             channel_id: Broadcaster channel ID
             username: Username who sent the message
             message: Message text content
             sent_at: Timestamp when message was sent
             embedding: Message embedding vector (1536 dimensions)
-            
+
         Returns:
             Message ID as string
         """
         new_id = uuid.uuid4()
-        
+
         async with self.session_factory() as session:
             entity = ChatMessage(
                 id=new_id,
@@ -76,11 +76,11 @@ class ChatStore:
             )
             session.add(entity)
             await session.commit()
-        
+
         logger.debug(
             f"Inserted chat message: {new_id} from {username} in channel {channel_id} at {sent_at}"
         )
-        
+
         return str(new_id)
 
     async def search_messages(
@@ -92,14 +92,14 @@ class ChatStore:
         prefilter_limit: int = 200,
     ) -> List[Dict[str, Any]]:
         """Search chat messages using vector similarity with time-decay scoring.
-        
+
         Args:
             query_embedding: Query vector embedding (1536 dimensions)
             limit: Maximum number of results to return
             half_life_minutes: Half-life for time decay scoring (default: 60 minutes)
             channel_id: Optional channel ID to filter by
             prefilter_limit: Maximum candidates to consider before time decay
-            
+
         Returns:
             List of message dictionaries with scores
         """
@@ -161,3 +161,63 @@ class ChatStore:
             )
         return output
 
+    async def get_messages_by_ids(self, message_ids: List[str]) -> List[Dict[str, Any]]:
+        """Get chat messages by their IDs.
+
+        Args:
+            message_ids: List of chat message UUIDs as strings
+
+        Returns:
+            List of chat message dicts with id, username, message, sent_at
+        """
+        if not message_ids:
+            return []
+
+        # Use IN clause - convert string UUIDs to UUID objects for PostgreSQL
+        # Build parameterized query with proper UUID casting
+        placeholders = ",".join([f":id{i}" for i in range(len(message_ids))])
+        sql = f"""
+        SELECT id, channel_id, username, message, sent_at
+        FROM chat_messages
+        WHERE id IN ({placeholders})
+        ORDER BY sent_at
+        """
+
+        # Build parameter dict with UUID conversion
+        params = {f"id{i}": uuid.UUID(msg_id) for i, msg_id in enumerate(message_ids)}
+
+        async with self.session_factory() as session:
+            result = await session.execute(text(sql), params)
+            rows = result.mappings().all()
+
+            return [
+                {
+                    "id": str(row["id"]),
+                    "channel_id": row["channel_id"],
+                    "username": row["username"],
+                    "message": row["message"],
+                    "sent_at": row["sent_at"],
+                }
+                for row in rows
+            ]
+
+    async def count_recent_messages(
+        self,
+        channel_id: str,
+        window_seconds: int = 30,
+    ) -> int:
+        """Count messages sent within a window ending at NOW()."""
+        sql = """
+        SELECT COUNT(*) AS message_count
+        FROM chat_messages
+        WHERE channel_id = :channel_id
+          AND sent_at >= (NOW() - (:window_seconds * INTERVAL '1 second'))
+        """
+
+        async with self.session_factory() as session:
+            result = await session.execute(
+                text(sql),
+                {"channel_id": channel_id, "window_seconds": window_seconds},
+            )
+            row = result.mappings().first()
+            return int(row["message_count"]) if row else 0

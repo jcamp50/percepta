@@ -44,6 +44,7 @@ from py.ingest.event_handler import EventHandler
 from py.memory.vector_store import VectorStore
 from py.memory.video_store import VideoStore
 from py.memory.chat_store import ChatStore
+from py.ingest.video import determine_capture_interval
 from py.memory.redis_session import RedisSessionManager
 from py.utils.embeddings import embed_text
 from py.utils.logging import get_logger
@@ -356,7 +357,7 @@ async def receive_message(message: ChatMessage):
             chat_logger.warning(
                 f"Failed to store chat message from {message.username} in {message.channel}: {store_exc}",
                 exc_info=True,
-            )
+        )
 
     # Check for admin commands first (!pause, !resume, !status)
     admin_response = await handle_admin_command(message)
@@ -1033,6 +1034,9 @@ async def receive_video_frame(
     image_file: UploadFile = File(..., description="Video frame image (JPEG/PNG)"),
     channel_id: str = Form(..., description="Broadcaster channel ID"),
     captured_at: str = Form(..., description="ISO timestamp when frame was captured"),
+    interesting_hint: Optional[str] = Form(
+        None, description="Optional hint that frame may be interesting"
+    ),
 ):
     """
     Receive video frame screenshot from Node service and store in vector DB.
@@ -1073,18 +1077,56 @@ async def receive_video_frame(
             )
             captured_at_obj = datetime.fromisoformat(captured_at_str)
 
+            hint_bool: Optional[bool] = None
+            if interesting_hint is not None:
+                lower_hint = interesting_hint.lower()
+                if lower_hint in {"true", "1", "yes", "on"}:
+                    hint_bool = True
+                elif lower_hint in {"false", "0", "no", "off"}:
+                    hint_bool = False
+
             # Store frame in database (VideoStore will generate embedding and move file)
-            frame_id = await video_store.insert_frame(
+            insert_result = await video_store.insert_frame(
                 channel_id=channel_id,
                 image_path=tmp_path,
                 captured_at=captured_at_obj,
+                is_interesting=hint_bool,
             )
+            frame_id = insert_result["frame_id"]
+
+            if chat_store is not None and vector_store is not None:
+                capture_decision = await determine_capture_interval(
+                    channel_id=channel_id,
+                    captured_at=captured_at_obj,
+                    chat_store=chat_store,
+                    vector_store=vector_store,
+                    recent_chat_count=insert_result.get("chat_count"),
+                    transcript_text=insert_result.get("transcript_text"),
+                    was_interesting=insert_result.get("was_interesting", False),
+                )
+            else:
+                capture_decision = {
+                    "next_interval_seconds": 10,
+                    "recent_chat_count": insert_result.get("chat_count", 0),
+                    "keyword_trigger": False,
+                }
 
             video_logger.info(
                 f"Stored video frame: frame_id={frame_id}, channel={channel_id}"
             )
 
-            return {"frame_id": frame_id, "status": "success"}
+            return {
+                "frame_id": frame_id,
+                "status": "success",
+                "description_source": insert_result.get("description_source"),
+                "reused_description": insert_result.get("reused_description", False),
+                "interesting_frame": insert_result.get("was_interesting", False),
+                "next_interval_seconds": capture_decision["next_interval_seconds"],
+                "activity": {
+                    "recent_chat_count": capture_decision["recent_chat_count"],
+                    "keyword_trigger": capture_decision["keyword_trigger"],
+                },
+            }
 
         except Exception as e:
             # Clean up temp file on error
