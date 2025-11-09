@@ -44,26 +44,22 @@ class GenerateDescriptionRetryTests(unittest.IsolatedAsyncioTestCase):
 
         call_counter = {"count": 0}
 
-        class FakeCompletions:
-            def create(self, **kwargs):
+        class FakeClient:
+            def post(self, path, *, body, cast_to):
                 call_counter["count"] += 1
                 if call_counter["count"] < 3:
                     raise DummyRateLimitError("rate limit")
-                return SimpleNamespace(
-                    choices=[
-                        SimpleNamespace(
-                            message=SimpleNamespace(content="Recovered description")
-                        )
+                return {
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [
+                                {"type": "output_text", "text": "Recovered description"}
+                            ],
+                        }
                     ]
-                )
-
-        class FakeChat:
-            def __init__(self):
-                self.completions = FakeCompletions()
-
-        class FakeClient:
-            def __init__(self):
-                self.chat = FakeChat()
+                }
 
         image_dir = tempfile.TemporaryDirectory()
         image_path = Path(image_dir.name) / "frame.jpg"
@@ -77,7 +73,9 @@ class GenerateDescriptionRetryTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch.object(
             vd, "RateLimitError", DummyRateLimitError
-        ), mock.patch.object(vd.asyncio, "sleep", new=fake_sleep), mock.patch.object(
+        ), mock.patch.object(vd, "s3_storage_enabled", return_value=False), mock.patch.object(
+            vd.asyncio, "sleep", new=fake_sleep
+        ), mock.patch.object(
             vd.asyncio, "to_thread", new=fake_to_thread
         ):
             result = await vd.generate_frame_description(

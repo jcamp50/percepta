@@ -24,6 +24,12 @@ except ImportError:  # Backwards compatibility for older client versions
 
 from py.config import settings
 from py.utils.logging import get_logger
+from py.utils.storage import (
+    S3StorageNotConfigured,
+    S3UploadError,
+    is_enabled as s3_storage_enabled,
+    upload_frame_to_s3,
+)
 
 logger = get_logger(__name__, category="video")
 description_logger = get_logger(__name__, category="video_description")
@@ -194,9 +200,6 @@ async def generate_frame_description(
         except TypeError:
             client = OpenAI(api_key=settings.openai_api_key)
 
-    with open(image_path, "rb") as image_file:
-        base64_image = b64encode(image_file.read()).decode("utf-8")
-
     prompt = _build_description_prompt(
         previous_frame_description=previous_frame_description,
         recent_summary=recent_summary,
@@ -206,43 +209,131 @@ async def generate_frame_description(
     )
     system_prompt = _load_system_prompt()
 
-    def _call_openai() -> Any:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            temperature=0.4,
-            max_tokens=500,
-            messages=[
-                {
-                    "role": "system",
-                    "content": system_prompt,
-                },
+    async def _build_image_payload() -> Dict[str, Any]:
+        if s3_storage_enabled():
+            try:
+                upload_result = await asyncio.to_thread(
+                    upload_frame_to_s3,
+                    image_path=image_path,
+                    channel_id=channel_id,
+                    captured_at=captured_at,
+                )
+                url = upload_result.url
+                description_logger.info(
+                    "Using S3 image URL for channel %s at %s (length=%s, prefix=%s...)",
+                    channel_id,
+                    captured_at.isoformat(),
+                    len(url),
+                    url[:32],
+                )
+                return {
+                    "type": "input_image",
+                    "image_url": url,
+                    "detail": "low",
+                }
+
+            except (S3UploadError, S3StorageNotConfigured, FileNotFoundError) as exc:
+                description_logger.warning(
+                    "Falling back to inline base64 for channel %s at %s: %s",
+                    channel_id,
+                    captured_at.isoformat(),
+                    exc,
+                )
+
+        with open(image_path, "rb") as image_file:
+            base64_image = b64encode(image_file.read()).decode("utf-8")
+        data_uri = f"data:image/jpeg;base64,{base64_image}"
+        description_logger.info(
+            "Using inline base64 image for channel %s at %s (length=%s, prefix=%s...)",
+            channel_id,
+            captured_at.isoformat(),
+            len(data_uri),
+            data_uri[:32],
+        )
+        return {
+            "type": "input_image",
+            "image_url": data_uri,
+            "detail": "low",
+        }
+
+    def _call_openai(image_payload: Dict[str, Any]) -> Dict[str, Any]:
+        request_body = {
+            "model": "gpt-4o-mini",
+            "temperature": 0.4,
+            "max_output_tokens": 500,
+            "instructions": system_prompt,
+            "input": [
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}"
-                            },
-                        },
+                        {"type": "input_text", "text": prompt},
+                        image_payload,
                     ],
                 },
             ],
+        }
+        try:
+            serialized_body = json.dumps(request_body)
+            description_logger.debug(
+                "Responses payload size: chars=%s, approx_kb=%.2f",
+                len(serialized_body),
+                len(serialized_body) / 1024,
+            )
+        except Exception:
+            pass
+
+        response = client.post(
+            "/responses",
+            body=request_body,
+            cast_to=Dict[str, Any],
         )
         return response
 
-    def _extract_content(response: Any) -> str:
-        choice = response.choices[0]
-        if not choice.message or not choice.message.content:
-            raise RuntimeError("OpenAI returned empty description content.")
-        return choice.message.content
+    def _extract_content(response: Dict[str, Any]) -> str:
+        if not isinstance(response, dict):
+            raise RuntimeError("Unexpected response type from OpenAI Responses API.")
 
-    async def _call_with_retry() -> Any:
+        # Check for the convenience field if present
+        convenience_text = response.get("output_text")
+        if isinstance(convenience_text, str) and convenience_text.strip():
+            return convenience_text
+
+        output_items = response.get("output") or []
+        for item in output_items:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") != "message":
+                continue
+
+            content = item.get("content") or []
+            text_parts: List[str] = []
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                part_type = part.get("type")
+                if part_type == "output_text":
+                    text_value = part.get("text")
+                    if isinstance(text_value, str):
+                        text_parts.append(text_value)
+                elif (
+                    part_type == "output_image_text"
+                ):  # fallback for potential future schema
+                    text_value = part.get("text")
+                    if isinstance(text_value, str):
+                        text_parts.append(text_value)
+
+            if text_parts:
+                return "".join(text_parts)
+
+        raise RuntimeError("OpenAI returned empty description content.")
+
+    image_payload = await _build_image_payload()
+
+    async def _call_with_retry() -> Dict[str, Any]:
         last_error: Optional[Exception] = None
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                return await asyncio.to_thread(_call_openai)
+                return await asyncio.to_thread(_call_openai, image_payload)
             except RateLimitError as exc:
                 last_error = exc
                 if attempt == MAX_RETRIES:
@@ -312,11 +403,14 @@ async def generate_frame_description(
         response = await _call_with_retry()
         content = _extract_content(response)
         try:
-            payload = (
-                response.model_dump()
-                if hasattr(response, "model_dump")
-                else json.loads(response.json())
-            )
+            if isinstance(response, dict):
+                payload = response
+            elif hasattr(response, "model_dump"):
+                payload = response.model_dump()
+            elif hasattr(response, "json"):
+                payload = json.loads(response.json())
+            else:
+                payload = {"raw": str(response)}
         except Exception:
             payload = {"raw": str(response)}
         _write_response_log(

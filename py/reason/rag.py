@@ -256,6 +256,13 @@ class RAGService:
             channel_id=channel_id
         )
 
+        if formatted_context and any("[Video Frame]" in line for line in formatted_context):
+            system_prompt = (
+                f"{system_prompt}\n\n"
+                "Visual context: Lines beginning with [Video Frame] are rich descriptions of on-screen content; "
+                "treat them as authoritative when reasoning about visuals."
+            )
+
         return [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},

@@ -14,15 +14,19 @@ Why FastAPI?
 - Fast and production-ready
 """
 
-from fastapi import FastAPI, HTTPException, File, UploadFile, Form
-from fastapi.middleware.cors import CORSMiddleware
-from datetime import datetime, timezone
-from typing import Optional, List
+import json
 import logging
 import os
+import re
 import tempfile
 import time
 import uuid
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+from typing import Optional, List
+
+from fastapi import FastAPI, HTTPException, File, UploadFile, Form
+from fastapi.middleware.cors import CORSMiddleware
 
 from py.config import settings
 from schemas.messages import (
@@ -50,6 +54,8 @@ from py.utils.embeddings import embed_text
 from py.utils.logging import get_logger
 from py.utils.content_filter import is_safe_for_chat, filter_response_content
 from py.utils.twitch_api import get_broadcaster_id_from_channel_name
+
+RAG_ASK_LOG_ROOT = Path(__file__).resolve().parents[1] / "logs" / "rag_tests" / "ask"
 
 # Configure logging
 # TASK: Set up Python logging
@@ -96,6 +102,61 @@ def filter_access_log(record):
 
 # Add filter to access logger
 access_logger.addFilter(filter_access_log)
+
+
+def _safe_path_component(value: str) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9_.-]", "_", value)
+    return sanitized or "unknown"
+
+
+def _json_default(value):  # type: ignore[no-untyped-def]
+    if isinstance(value, datetime):
+        return value.isoformat() + "Z"
+    if isinstance(value, timedelta):
+        return value.total_seconds()
+    return str(value)
+
+
+def log_rag_ask_event(
+    *,
+    channel_id: str,
+    question: str,
+    result: dict,
+    system_prompt: str,
+    user_prompt: str,
+    metadata: Optional[dict] = None,
+) -> None:
+    event_time = datetime.utcnow()
+    timestamp_str = event_time.replace(microsecond=0).isoformat() + "Z"
+
+    payload = {
+        "timestamp": timestamp_str,
+        "channel_id": channel_id,
+        "question": question,
+        "system_prompt": system_prompt,
+        "user_prompt": user_prompt,
+        "answer": result.get("answer"),
+        "citations": result.get("citations", []),
+        "context": result.get("context", []),
+        "chunks": result.get("chunks", []),
+        "metadata": metadata or {},
+    }
+
+    safe_channel = _safe_path_component(str(channel_id))
+    channel_dir = RAG_ASK_LOG_ROOT / safe_channel
+
+    try:
+        channel_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"{event_time.strftime('%Y%m%dT%H%M%S%f')}Z_success.json"
+        (channel_dir / filename).write_text(
+            json.dumps(payload, indent=2, default=_json_default),
+            encoding="utf-8",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Failed to write RAG ask log for channel %s: %s", channel_id, exc, exc_info=True
+        )
+
 
 # Create FastAPI app
 # TASK: Create FastAPI instance
@@ -771,6 +832,25 @@ async def rag_answer(request: RAGQueryRequest):
     except Exception:
         logger.exception("Failed to generate RAG answer")
         raise HTTPException(status_code=500, detail="Failed to generate answer")
+
+    request_metadata = {
+        "source": "api",
+        "request_channel": request.channel,
+        "top_k": request.top_k,
+        "half_life_minutes": request.half_life_minutes,
+        "prefilter_limit": request.prefilter_limit,
+    }
+    # Remove None values to keep metadata clean
+    request_metadata = {key: value for key, value in request_metadata.items() if value is not None}
+    prompts = result.get("prompts", {})
+    log_rag_ask_event(
+        channel_id=str(channel_id),
+        question=request.question,
+        result=result,
+        system_prompt=prompts.get("system", ""),
+        user_prompt=prompts.get("user", ""),
+        metadata=request_metadata,
+    )
 
     return RAGAnswerResponse(**result)
 

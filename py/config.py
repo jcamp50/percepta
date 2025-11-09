@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     openai_api_key: Optional[str] = None
     twitch_bot_name: Optional[str] = None
+    aws_profile: Optional[str] = None
+    aws_region: Optional[str] = None
     rag_top_k: int = 5
     rag_prefilter_limit: int = 40
     rag_half_life_minutes: int = 60
@@ -99,6 +101,9 @@ class Settings(BaseSettings):
     video_capture_keyword_list: Optional[str] = None  # comma separated keywords
     video_frame_hash_window_seconds: int = 60  # window when searching for similar frames
     video_frame_hash_max_distance: int = 8  # hamming distance threshold for hash reuse
+    video_frame_bucket: Optional[str] = None
+    video_frame_prefix: Optional[str] = None
+    video_frame_url_ttl_seconds: int = 600  # seconds
 
     class Config:
         """
