@@ -9,6 +9,7 @@ from typing import Awaitable, Dict, List, Optional, Tuple
 from py.memory.vector_store import VectorStore
 from py.memory.video_store import VideoStore
 from py.memory.chat_store import ChatStore
+from py.memory.summarizer import Summarizer
 from .interfaces import SearchResult
 
 
@@ -25,6 +26,7 @@ MODALITY_WEIGHTS: Dict[str, float] = {
     "event": 1.05,
     "video": 0.95,
     "chat": 1.1,
+    "summary": 1.0,
 }
 
 TIME_ALIGNMENT_WINDOW_SECONDS = 5
@@ -52,7 +54,7 @@ class _WeightedResult:
 
 
 class Retriever:
-    """Abstraction over multiple stores. Currently transcripts, events, video frames, and chat messages."""
+    """Abstraction over multiple stores. Currently transcripts, events, video frames, chat messages, and summaries."""
 
     def __init__(
         self,
@@ -60,10 +62,12 @@ class Retriever:
         vector_store: Optional[VectorStore] = None,
         video_store: Optional[VideoStore] = None,
         chat_store: Optional[ChatStore] = None,
+        summarizer: Optional[Summarizer] = None,
     ) -> None:
         self.vector_store = vector_store or VectorStore()
         self.video_store = video_store
         self.chat_store = chat_store
+        self.summarizer = summarizer
 
     async def from_transcripts(
         self, *, query_embedding: List[float], params: RetrievalParams
@@ -291,6 +295,70 @@ class Retriever:
             for r in rows
         ]
 
+    async def from_summaries(
+        self, *, query_embedding: List[float], params: RetrievalParams
+    ) -> List[SearchResult]:
+        """
+        Retrieve summaries using vector similarity with time-decay scoring.
+
+        Summaries represent 2-minute segments and use start_time and end_time.
+        """
+        if self.summarizer is None:
+            return []
+
+        rows = await self.summarizer.select_relevant_summaries(
+            query_embedding=query_embedding,
+            channel_id=params.channel_id or "",
+            limit=params.limit,
+            half_life_minutes=params.half_life_minutes,
+            prefilter_limit=params.prefilter_limit,
+        )
+        return [
+            SearchResult(
+                id=r["id"],
+                channel_id=r["channel_id"],
+                text=f"[Summary] {r['summary_text']}",
+                started_at=r["start_time"],
+                ended_at=r["end_time"],
+                cosine_distance=float(r["cosine_distance"]),
+                score=float(r["score"]),
+            )
+            for r in rows
+        ]
+
+    async def get_most_recent_summary(
+        self, *, channel_id: Optional[str]
+    ) -> Optional[SearchResult]:
+        """
+        Get the most recent summary (highest segment_number) for a channel.
+
+        This is always included in RAG context regardless of semantic relevance.
+
+        Args:
+            channel_id: Broadcaster channel ID
+
+        Returns:
+            SearchResult for the most recent summary, or None if no summaries exist
+        """
+        if self.summarizer is None or not channel_id:
+            return None
+
+        summary_dict = await self.summarizer.get_most_recent_summary(
+            channel_id=channel_id
+        )
+        if not summary_dict:
+            return None
+
+        return SearchResult(
+            id=summary_dict["id"],
+            channel_id=summary_dict["channel_id"],
+            text=f"[Most Recent Summary] {summary_dict['summary_text']}",
+            started_at=summary_dict["start_time"],
+            ended_at=summary_dict["end_time"],
+            cosine_distance=0.0,  # Not relevant for most recent summary
+            score=0.0,  # Not relevant for most recent summary
+        )
+
     def _make_weighted(self, result: SearchResult, modality: str) -> _WeightedResult:
         weight = MODALITY_WEIGHTS.get(modality, 1.0)
         adjusted = result.score * weight
@@ -429,6 +497,7 @@ class Retriever:
         events: List[SearchResult],
         videos: List[SearchResult],
         chats: List[SearchResult],
+        summaries: List[SearchResult],
         limit: int,
         window_seconds: int = TIME_ALIGNMENT_WINDOW_SECONDS,
     ) -> List[SearchResult]:
@@ -441,6 +510,8 @@ class Retriever:
             weighted.append(self._make_weighted(result, "video"))
         for result in chats:
             weighted.append(self._make_weighted(result, "chat"))
+        for result in summaries:
+            weighted.append(self._make_weighted(result, "summary"))
 
         if not weighted:
             return []
@@ -458,7 +529,7 @@ class Retriever:
         self, *, query_embedding: List[float], params: RetrievalParams
     ) -> List[SearchResult]:
         """
-        Retrieve from transcripts, events, video frames, and chat messages in parallel, then merge results.
+        Retrieve from transcripts, events, video frames, chat messages, and summaries in parallel, then merge results.
 
         Results are ranked by time-decay adjusted score across all sources.
         """
@@ -495,6 +566,14 @@ class Retriever:
                 )
             )
 
+        if self.summarizer is not None:
+            coroutines.append(
+                (
+                    "summaries",
+                    self.from_summaries(query_embedding=query_embedding, params=params),
+                )
+            )
+
         if not coroutines:
             return []
 
@@ -508,6 +587,7 @@ class Retriever:
             events=results_map.get("events", []),
             videos=results_map.get("videos", []),
             chats=results_map.get("chats", []),
+            summaries=results_map.get("summaries", []),
             limit=params.limit,
         )
 

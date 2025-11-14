@@ -154,7 +154,10 @@ def log_rag_ask_event(
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "Failed to write RAG ask log for channel %s: %s", channel_id, exc, exc_info=True
+            "Failed to write RAG ask log for channel %s: %s",
+            channel_id,
+            exc,
+            exc_info=True,
         )
 
 
@@ -251,10 +254,36 @@ except Exception as exc:
     logger.warning("Chat store unavailable: %s", exc)
     chat_store = None
 
+# Initialize summarizer for memory-propagated summarization
+try:
+    from py.memory.summarizer import Summarizer
+
+    summarizer: Optional[Summarizer] = None
+    if vector_store and video_store and chat_store:
+        summarizer = Summarizer(
+            video_store=video_store,
+            vector_store=vector_store,
+            chat_store=chat_store,
+        )
+        logger.info("Summarizer initialized")
+    else:
+        logger.warning(
+            "Summarizer not initialized: missing required stores (vector=%s, video=%s, chat=%s)",
+            vector_store is not None,
+            video_store is not None,
+            chat_store is not None,
+        )
+except Exception as exc:
+    logger.warning("Summarizer unavailable: %s", exc)
+    summarizer = None
+
 # Initialize RAG service (after stores are initialized)
 try:
     rag_service: Optional[RAGService] = RAGService(
-        vector_store=vector_store, video_store=video_store, chat_store=chat_store
+        vector_store=vector_store,
+        video_store=video_store,
+        chat_store=chat_store,
+        summarizer=summarizer,
     )
 except ValueError as exc:
     logger.warning("RAG service unavailable: %s", exc)
@@ -308,8 +337,6 @@ if settings.metadata_poll_enabled:
 # ============================================================================
 # ENDPOINTS
 # ============================================================================
-
-
 
 
 def is_admin_user(username: str) -> bool:
@@ -403,6 +430,7 @@ async def receive_message(message: ChatMessage):
             sent_at = message.timestamp
             if sent_at.tzinfo is None:
                 from datetime import timezone
+
                 sent_at = sent_at.replace(tzinfo=timezone.utc)
 
             # Store message in chat_store
@@ -418,7 +446,7 @@ async def receive_message(message: ChatMessage):
             chat_logger.warning(
                 f"Failed to store chat message from {message.username} in {message.channel}: {store_exc}",
                 exc_info=True,
-        )
+            )
 
     # Check for admin commands first (!pause, !resume, !status)
     admin_response = await handle_admin_command(message)
@@ -616,7 +644,9 @@ async def receive_message(message: ChatMessage):
                     # Convert channel name to broadcaster ID for RAG queries
                     channel_broadcaster_id = message.channel
                     # Try to get broadcaster ID using shared utility function
-                    broadcaster_id = await get_broadcaster_id_from_channel_name(message.channel)
+                    broadcaster_id = await get_broadcaster_id_from_channel_name(
+                        message.channel
+                    )
                     if broadcaster_id:
                         channel_broadcaster_id = broadcaster_id
 
@@ -841,7 +871,9 @@ async def rag_answer(request: RAGQueryRequest):
         "prefilter_limit": request.prefilter_limit,
     }
     # Remove None values to keep metadata clean
-    request_metadata = {key: value for key, value in request_metadata.items() if value is not None}
+    request_metadata = {
+        key: value for key, value in request_metadata.items() if value is not None
+    }
     prompts = result.get("prompts", {})
     log_rag_ask_event(
         channel_id=str(channel_id),
@@ -860,7 +892,7 @@ async def debug_credentials():
     """Debug endpoint to check what credentials are loaded"""
     client_id = settings.twitch_client_id or ""
     bot_token = settings.twitch_bot_token or ""
-    
+
     return {
         "client_id_present": bool(client_id),
         "client_id_length": len(client_id),
@@ -868,19 +900,22 @@ async def debug_credentials():
         "bot_token_present": bool(bot_token),
         "bot_token_length": len(bot_token),
         "bot_token_prefix": bot_token[:10] if bot_token else None,
-        "bot_token_has_oauth_prefix": bot_token.startswith("oauth:") if bot_token else False,
+        "bot_token_has_oauth_prefix": (
+            bot_token.startswith("oauth:") if bot_token else False
+        ),
     }
+
 
 @app.get("/health")
 async def health_check():
     """
     Health check endpoint to verify service is working correctly.
-    
+
     Returns service status. Used by:
     - Docker health checks
     - Load balancers
     - Monitoring systems
-    
+
     Tests broadcaster ID lookup to ensure the service can communicate with Twitch API.
     Uses TARGET_CHANNEL from .env for validation.
     """
@@ -897,10 +932,12 @@ async def health_check():
     broadcaster_id_lookup_error = None
     test_channel = None
     test_broadcaster_id = None
-    
+
     if settings.target_channel:
         try:
-            test_id = await get_broadcaster_id_from_channel_name(settings.target_channel)
+            test_id = await get_broadcaster_id_from_channel_name(
+                settings.target_channel
+            )
             if test_id:
                 broadcaster_id_lookup_status = "working"
                 test_channel = settings.target_channel
@@ -913,7 +950,9 @@ async def health_check():
             broadcaster_id_lookup_status = "error"
             broadcaster_id_lookup_error = str(e)
             test_channel = settings.target_channel
-            logger.error(f"Health check broadcaster ID lookup failed: {e}", exc_info=True)
+            logger.error(
+                f"Health check broadcaster ID lookup failed: {e}", exc_info=True
+            )
 
     return {
         "status": "healthy",
@@ -930,6 +969,7 @@ async def health_check():
             "error": broadcaster_id_lookup_error,
         },
     }
+
 
 @app.get("/api/get-broadcaster-id")
 async def get_broadcaster_id(channel_name: str):
@@ -948,21 +988,22 @@ async def get_broadcaster_id(channel_name: str):
     try:
         # Use shared utility function that matches metadata poller pattern
         broadcaster_id = await get_broadcaster_id_from_channel_name(channel_name)
-        
+
         if broadcaster_id:
             return {"broadcaster_id": broadcaster_id, "channel_name": channel_name}
         else:
             raise HTTPException(
                 status_code=404,
-                detail=f"Channel not found: {channel_name}. Failed to get broadcaster ID from Twitch API."
+                detail=f"Channel not found: {channel_name}. Failed to get broadcaster ID from Twitch API.",
             )
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Unexpected error in get_broadcaster_id endpoint: {e}", exc_info=True)
+        logger.error(
+            f"Unexpected error in get_broadcaster_id endpoint: {e}", exc_info=True
+        )
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to get broadcaster ID: {str(e)}"
+            status_code=500, detail=f"Failed to get broadcaster ID: {str(e)}"
         )
 
 
@@ -998,7 +1039,7 @@ async def get_audio_stream_url(channel_id: str):
             )
             return AudioStreamUrlResponse(
                 channel_id=channel_id,
-                stream_url="",
+                stream_url=None,
                 quality="audio_only",
                 available=False,
             )
@@ -1070,18 +1111,14 @@ async def get_video_stream_url(channel_id: str):
         if video_stream is None:
             # Stream is not available (offline or restricted)
             return AudioStreamUrlResponse(
-                channel_id=channel_id,
-                available=False,
-                stream_url=None
+                channel_id=channel_id, available=False, stream_url=None
             )
 
         # Get the HLS URL
         stream_url = video_stream.url
 
         return AudioStreamUrlResponse(
-            channel_id=channel_id,
-            available=True,
-            stream_url=stream_url
+            channel_id=channel_id, available=True, stream_url=stream_url
         )
 
     except ImportError:
@@ -1217,7 +1254,9 @@ async def receive_video_frame(
     except ValueError as e:
         # Invalid timestamp format
         video_logger.error(f"Invalid timestamp format: {captured_at}")
-        raise HTTPException(status_code=400, detail=f"Invalid timestamp format: {str(e)}")
+        raise HTTPException(
+            status_code=400, detail=f"Invalid timestamp format: {str(e)}"
+        )
     except Exception as exc:
         video_logger.exception(f"Failed to process video frame: {exc}")
         raise HTTPException(
@@ -1455,13 +1494,17 @@ async def startup_event():
             stream_metadata_logger.info("Metadata polling started")
         except Exception as exc:
             stream_metadata_logger.error(f"Failed to start metadata polling: {exc}")
-    
+
     # Validate broadcaster ID lookup on startup
     if settings.target_channel:
         try:
-            test_id = await get_broadcaster_id_from_channel_name(settings.target_channel)
+            test_id = await get_broadcaster_id_from_channel_name(
+                settings.target_channel
+            )
             if test_id:
-                logger.info(f"Broadcaster ID lookup validated on startup for channel: {settings.target_channel} (ID: {test_id})")
+                logger.info(
+                    f"Broadcaster ID lookup validated on startup for channel: {settings.target_channel} (ID: {test_id})"
+                )
             else:
                 logger.warning(
                     f"Broadcaster ID lookup returned None for channel: {settings.target_channel}. "
@@ -1473,7 +1516,17 @@ async def startup_event():
                 "Service may not function correctly."
             )
     else:
-        logger.warning("TARGET_CHANNEL not set in .env, skipping broadcaster ID lookup validation")
+        logger.warning(
+            "TARGET_CHANNEL not set in .env, skipping broadcaster ID lookup validation"
+        )
+
+    # Start background summarization job
+    if summarizer:
+        try:
+            summarizer.start_background_job()
+            logger.info("Background summarization job started")
+        except Exception as exc:
+            logger.warning("Failed to start background summarization job: %s", exc)
 
 
 @app.on_event("shutdown")

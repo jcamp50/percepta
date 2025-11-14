@@ -221,3 +221,50 @@ class ChatStore:
             )
             row = result.mappings().first()
             return int(row["message_count"]) if row else 0
+
+    async def get_range(
+        self,
+        channel_id: str,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> List[Dict[str, Any]]:
+        """Return chat messages within a time range.
+
+        Args:
+            channel_id: Broadcaster channel ID
+            start_time: Start of time range (inclusive)
+            end_time: End of time range (inclusive)
+
+        Returns:
+            List of chat message dicts with id, username, message, sent_at
+        """
+        sql = """
+        SELECT id, channel_id, username, message, sent_at
+        FROM chat_messages
+        WHERE channel_id = :channel_id
+          AND sent_at >= :start_time
+          AND sent_at < :end_time
+        ORDER BY sent_at ASC
+        """
+
+        async with self.session_factory() as session:
+            result = await session.execute(
+                text(sql),
+                {
+                    "channel_id": channel_id,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                },
+            )
+            rows = result.mappings().all()
+
+        return [
+            {
+                "id": str(row["id"]),
+                "channel_id": row["channel_id"],
+                "username": row["username"],
+                "message": row["message"],
+                "sent_at": row["sent_at"],
+            }
+            for row in rows
+        ]

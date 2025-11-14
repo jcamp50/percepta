@@ -1,0 +1,13 @@
+Summarize the following 2-minute segment of a Twitch stream:
+
+{context}
+
+IMPORTANT: If the context above shows "(No transcripts, video frames, or chat messages available for this segment)", create a summary based on the previous segment summary (if provided) and note that no new data was captured during this time window. Otherwise, create a comprehensive summary that captures:
+- Key events and activities (gameplay, IRL activities, reactions, creative work, discussions, etc.)
+- Notable chat highlights and viewer engagement
+- Visual context from video frames (what's on screen, UI elements, overlays, visible text)
+- Streamer commentary, reactions, and interactions
+- The overall tone and atmosphere of the segment
+
+Include specific timestamps when mentioning events. Tailor the summary to the stream type while maintaining accuracy and detail.
+

@@ -81,6 +81,23 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_channel_sent
 CREATE INDEX IF NOT EXISTS idx_chat_messages_embedding
   ON chat_messages USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 
+-- Summaries: 2-minute segment summaries with memory propagation
+CREATE TABLE IF NOT EXISTS summaries (
+  id UUID PRIMARY KEY,
+  channel_id VARCHAR(255) NOT NULL,
+  start_time TIMESTAMPTZ NOT NULL,
+  end_time TIMESTAMPTZ NOT NULL,
+  summary_text TEXT NOT NULL,
+  embedding VECTOR(1536) NOT NULL,
+  segment_number INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_summaries_channel_start
+  ON summaries (channel_id, start_time DESC);
+CREATE INDEX IF NOT EXISTS idx_summaries_embedding
+  ON summaries USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS idx_summaries_channel_segment
+  ON summaries (channel_id, segment_number DESC);
+
 -- Migration: Add temporal alignment fields to video_frames (JCB-33)
 -- These columns link video frames to aligned transcripts, chat messages, and metadata
 DO $$

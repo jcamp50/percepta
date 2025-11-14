@@ -929,7 +929,7 @@ class VideoStore:
         FROM video_frames
         WHERE channel_id = :channel_id
           AND captured_at >= :start_time
-          AND captured_at <= :end_time
+          AND captured_at < :end_time
         ORDER BY captured_at ASC
         """
 

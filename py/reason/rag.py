@@ -51,6 +51,7 @@ class RAGService:
         vector_store: Optional[VectorStore] = None,
         video_store: Optional[VideoStore] = None,
         chat_store: Optional[ChatStore] = None,
+        summarizer: Optional[Any] = None,  # Summarizer type
         openai_client: Optional[OpenAI] = None,
         context_char_limit: Optional[int] = None,
         completion_model: Optional[str] = None,
@@ -66,10 +67,12 @@ class RAGService:
         self.vector_store = vector_store or VectorStore()
         self.video_store = video_store
         self.chat_store = chat_store
+        self.summarizer = summarizer
         self.retriever = Retriever(
             vector_store=self.vector_store,
             video_store=self.video_store,
             chat_store=self.chat_store,
+            summarizer=self.summarizer,
         )
         self.context_char_limit = context_char_limit or getattr(
             settings, "rag_context_char_limit", DEFAULT_CONTEXT_CHAR_LIMIT
@@ -120,7 +123,11 @@ class RAGService:
         query_embedding = await embed_text(question)
         t_embed = time.monotonic()
 
-        results = await self.retriever.retrieve(
+        # Fetch most recent summary and semantic search results in parallel
+        most_recent_summary_task = self.retriever.get_most_recent_summary(
+            channel_id=channel_id
+        )
+        semantic_results_task = self.retriever.retrieve(
             query_embedding=query_embedding,
             params=RetrievalParams(
                 channel_id=channel_id,
@@ -129,9 +136,29 @@ class RAGService:
                 prefilter_limit=prefilter_limit or max(top_k, 1),
             ),
         )
+
+        most_recent_summary, results = await asyncio.gather(
+            most_recent_summary_task, semantic_results_task
+        )
         t_search = time.monotonic()
 
         chunks: List[RetrievedChunk] = []
+
+        # Prepend most recent summary if available
+        if most_recent_summary:
+            chunks.append(
+                RetrievedChunk(
+                    id=most_recent_summary.id,
+                    channel_id=most_recent_summary.channel_id,
+                    text=most_recent_summary.text,
+                    started_at=most_recent_summary.started_at,
+                    ended_at=most_recent_summary.ended_at,
+                    cosine_distance=most_recent_summary.cosine_distance,
+                    score=most_recent_summary.score,
+                )
+            )
+
+        # Add semantic search results
         for row in results:
             chunks.append(
                 RetrievedChunk(
@@ -241,9 +268,11 @@ class RAGService:
         context_section = (
             "\n".join(formatted_context) if formatted_context else "(no context)"
         )
-        
+
         # Include conversation history if provided (empty string if not provided)
-        conversation_history_section = conversation_history if conversation_history else ""
+        conversation_history_section = (
+            conversation_history if conversation_history else ""
+        )
         user_prompt = self._format_prompt(
             self._user_prompt_template,
             context_section=context_section,
@@ -256,7 +285,9 @@ class RAGService:
             channel_id=channel_id
         )
 
-        if formatted_context and any("[Video Frame]" in line for line in formatted_context):
+        if formatted_context and any(
+            "[Video Frame]" in line for line in formatted_context
+        ):
             system_prompt = (
                 f"{system_prompt}\n\n"
                 "Visual context: Lines beginning with [Video Frame] are rich descriptions of on-screen content; "
@@ -444,11 +475,13 @@ class RAGService:
                 )
                 system_prompt = messages[0]["content"]
                 user_prompt_text = messages[1]["content"]
-                
+
                 # Try to generate answer from conversation history
                 try:
                     answer_text = await self._call_llm(messages)
-                    if answer_text and len(answer_text.strip()) > 20:  # Substantive answer
+                    if (
+                        answer_text and len(answer_text.strip()) > 20
+                    ):  # Substantive answer
                         return {
                             "answer": answer_text,
                             "citations": [],
@@ -461,8 +494,10 @@ class RAGService:
                         }
                 except Exception as e:
                     logger = logging.getLogger(__name__)
-                    logger.warning(f"Failed to generate answer from conversation history: {e}")
-            
+                    logger.warning(
+                        f"Failed to generate answer from conversation history: {e}"
+                    )
+
             # No chunks and no usable conversation history - fallback
             fallback = "I don't have enough context to answer that right now."
             # Build prompts for consistency with response schema
@@ -499,11 +534,13 @@ class RAGService:
                 )
                 system_prompt = messages[0]["content"]
                 user_prompt_text = messages[1]["content"]
-                
+
                 # Try to generate answer from conversation history
                 try:
                     answer_text = await self._call_llm(messages)
-                    if answer_text and len(answer_text.strip()) > 20:  # Substantive answer
+                    if (
+                        answer_text and len(answer_text.strip()) > 20
+                    ):  # Substantive answer
                         return {
                             "answer": answer_text,
                             "citations": [],
@@ -516,8 +553,10 @@ class RAGService:
                         }
                 except Exception as e:
                     logger = logging.getLogger(__name__)
-                    logger.warning(f"Failed to generate answer from conversation history: {e}")
-            
+                    logger.warning(
+                        f"Failed to generate answer from conversation history: {e}"
+                    )
+
             fallback = "I don't have enough context to answer that right now."
             # Build prompts even when no chunks selected
             messages = await self._build_messages(

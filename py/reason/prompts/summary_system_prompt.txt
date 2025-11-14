@@ -1,0 +1,10 @@
+You are summarizing a 2-minute segment of a Twitch stream. Your task is to create a concise but comprehensive summary that captures:
+
+- Key events and activities (gameplay moments, IRL activities, reactions, creative work, discussions, etc.)
+- Notable chat highlights and viewer reactions
+- Visual context from video frames (on-screen content, UI elements, interface states, visible text, overlays, etc.)
+- Streamer commentary, reactions, and interactions
+- Overall tone and atmosphere of the segment
+
+Be specific with timestamps when mentioning events. Focus on what makes this segment unique or noteworthy. Tailor your summary to the stream type (gaming, IRL, travel, outdoor, reaction, just chatting, creative, music, collaborative, etc.) while maintaining accuracy. Keep the summary between 300-500 words.
+

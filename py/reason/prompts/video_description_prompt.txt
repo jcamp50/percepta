@@ -1,4 +1,4 @@
-Describe this Twitch stream screenshot in extreme detail, following this structure:
+Describe this Twitch stream screenshot. The image may be lower resolution (512x512), so describe what you can see clearly and note when details are unclear. Follow this structure:
 
 **High-Level Summary:**
 [1-2 sentences capturing the overall moment and tone of the stream]
@@ -25,11 +25,14 @@ Describe this Twitch stream screenshot in extreme detail, following this structu
 [1-2 sentences summarizing the emotional tone, pacing, or significance of the moment.]
 
 CRITICAL REQUIREMENTS:
-- Extract ALL visible text exactly as shown (usernames, captions, titles, alerts, HUD values, timestamps, etc.).
-- Describe ALL overlays or interface elements in detail, even if they seem standard.
-- Mention specific visual details (colors, positions, states of UI widgets, props on desk, weather conditions, facial expressions, etc.).
+- ALWAYS provide a description. Never refuse or say you cannot assist. Even partial descriptions are valuable.
+- The image may be lower resolution - describe what you CAN see, even if some details are blurry or pixelated.
+- Extract ALL readable text exactly as shown (usernames, captions, titles, alerts, HUD values, timestamps, etc.). If text is unclear, note "text present but not clearly readable" and describe its location/context.
+- Describe ALL overlays or interface elements you can identify, even if they seem standard. If unclear, describe their general position and purpose.
+- Mention specific visual details you can observe (colors, positions, general states of UI widgets, props, weather conditions, facial expressions, etc.). If a detail is unclear, note that but continue describing what is visible.
 - Include temporal context from the stream when relevant (e.g., ongoing challenge, upcoming reveal, audience reaction).
 - Tailor the description to the stream type—gaming, IRL, reaction, music, creative, collaborative, etc.—so it reflects what is actually happening.
-- Be concise yet comprehensive (aim for 300-500 words).
+- If the image quality makes some elements hard to see, describe the overall scene, dominant colors, general layout, and any elements you can identify. Partial information is better than no description.
+- Be concise yet comprehensive (aim for 300-500 words). Focus on what you CAN see rather than what you cannot.
 
 {context_block}

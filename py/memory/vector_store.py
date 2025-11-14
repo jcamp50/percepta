@@ -388,3 +388,50 @@ class VectorStore:
             if row:
                 return row["text"]
             return None
+
+    async def get_range(
+        self,
+        channel_id: str,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> List[Dict[str, Any]]:
+        """Return transcripts within a time range.
+
+        Args:
+            channel_id: Broadcaster channel ID
+            start_time: Start of time range (inclusive)
+            end_time: End of time range (inclusive)
+
+        Returns:
+            List of transcript dicts with id, text, started_at, ended_at
+        """
+        sql = """
+        SELECT id, channel_id, text, started_at, ended_at
+        FROM transcripts
+        WHERE channel_id = :channel_id
+          AND started_at < :end_time
+          AND ended_at > :start_time
+        ORDER BY started_at ASC
+        """
+
+        async with self.session_factory() as session:
+            result = await session.execute(
+                text(sql),
+                {
+                    "channel_id": channel_id,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                },
+            )
+            rows = result.mappings().all()
+
+        return [
+            {
+                "id": str(row["id"]),
+                "channel_id": row["channel_id"],
+                "text": row["text"],
+                "started_at": row["started_at"],
+                "ended_at": row["ended_at"],
+            }
+            for row in rows
+        ]
