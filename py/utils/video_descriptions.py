@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 import json
 import random
+import re
 
 from openai import OpenAI
 
@@ -182,8 +183,14 @@ async def generate_frame_description(
     chat: Optional[List[Dict[str, str]]] = None,
     metadata: Optional[Dict[str, str]] = None,
     openai_client: Optional[OpenAI] = None,
-) -> str:
-    """Generate a high-detail textual description for a video frame using GPT-4o-mini."""
+) -> Dict[str, Any]:
+    """Generate a JSON description for a video frame using GPT-4o-mini.
+
+    Returns:
+        Dict containing structured video frame description with fields:
+        timestamp, high_level_summary, participants, primary_scene,
+        on_screen_media, environment, overlays, overall_impression
+    """
     if not settings.openai_api_key:
         raise ValueError(
             "OPENAI_API_KEY is required for visual description generation."
@@ -260,7 +267,7 @@ async def generate_frame_description(
         request_body = {
             "model": "gpt-4o-mini",
             "temperature": 0.4,
-            "max_output_tokens": 500,
+            "max_output_tokens": 900,
             "instructions": system_prompt,
             "input": [
                 {
@@ -289,19 +296,98 @@ async def generate_frame_description(
         )
         return response
 
-    def _extract_content(response: Dict[str, Any]) -> str:
+    def _strip_markdown_code_blocks(text: str) -> str:
+        """Strip markdown code blocks from text (e.g., ```json ... ```).
+
+        Args:
+            text: Text that may contain markdown code blocks
+
+        Returns:
+            Text with markdown code blocks removed
+        """
+        text = text.strip()
+        # Remove ```json or ``` at the start
+        if text.startswith("```"):
+            # Find the first newline after ```
+            first_newline = text.find("\n")
+            if first_newline != -1:
+                text = text[first_newline + 1 :]
+            else:
+                # No newline, just remove ```
+                text = text[3:]
+        # Remove ``` at the end
+        if text.endswith("```"):
+            text = text[:-3]
+        return text.strip()
+
+    def _strip_trailing_commas(text: str) -> str:
+        """Remove trailing commas before closing braces/brackets."""
+        return re.sub(r",(\s*[}\]])", r"\1", text)
+
+    def _parse_json_text(raw_text: str) -> Dict[str, Any]:
+        """Parse JSON text after cleaning markdown wrappers and trailing commas."""
+        cleaned_text = _strip_markdown_code_blocks(raw_text)
+        try:
+            return json.loads(cleaned_text)
+        except json.JSONDecodeError:
+            repaired_text = _strip_trailing_commas(cleaned_text)
+            if repaired_text != cleaned_text:
+                try:
+                    return json.loads(repaired_text)
+                except json.JSONDecodeError:
+                    pass
+            raise
+
+    def _extract_content(response: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract JSON content from OpenAI response and parse it.
+
+        Returns:
+            Parsed JSON dict with video frame description structure
+        """
         if not isinstance(response, dict):
             raise RuntimeError("Unexpected response type from OpenAI Responses API.")
 
-        # Check for the convenience field if present
+        # First, check for the convenience field if present
         convenience_text = response.get("output_text")
         if isinstance(convenience_text, str) and convenience_text.strip():
-            return convenience_text
+            try:
+                return _parse_json_text(convenience_text)
+            except json.JSONDecodeError as exc:
+                description_logger.debug(
+                    "Failed to parse output_text as JSON: %s. Raw text: %s",
+                    exc,
+                    convenience_text[:200] if convenience_text else "empty",
+                )
+                raise RuntimeError(f"Failed to parse JSON from output_text: {exc}")
 
+        # Check output array
         output_items = response.get("output") or []
+        if not output_items:
+            # Log the full response structure for debugging
+            description_logger.error(
+                "No output items found in response. Response keys: %s. Full response: %s",
+                list(response.keys()) if isinstance(response, dict) else "not a dict",
+                json.dumps(response, indent=2, default=str)[:2000],
+            )
+            raise RuntimeError(
+                "OpenAI returned empty description content (no output items)."
+            )
+
+        # Try to extract from output items
         for item in output_items:
             if not isinstance(item, dict):
                 continue
+
+            # Check if item has text directly (some response formats)
+            if "text" in item:
+                text_value = item.get("text")
+                if isinstance(text_value, str) and text_value.strip():
+                    try:
+                        return _parse_json_text(text_value)
+                    except json.JSONDecodeError:
+                        pass
+
+            # Check message type items
             if item.get("type") != "message":
                 continue
 
@@ -313,19 +399,44 @@ async def generate_frame_description(
                 part_type = part.get("type")
                 if part_type == "output_text":
                     text_value = part.get("text")
-                    if isinstance(text_value, str):
+                    if isinstance(text_value, str) and text_value.strip():
                         text_parts.append(text_value)
-                elif (
-                    part_type == "output_image_text"
-                ):  # fallback for potential future schema
+                elif part_type == "output_image_text":
                     text_value = part.get("text")
-                    if isinstance(text_value, str):
+                    if isinstance(text_value, str) and text_value.strip():
+                        text_parts.append(text_value)
+                # Also check for direct text field
+                elif "text" in part:
+                    text_value = part.get("text")
+                    if isinstance(text_value, str) and text_value.strip():
                         text_parts.append(text_value)
 
             if text_parts:
-                return "".join(text_parts)
+                json_text = "".join(text_parts).strip()
+                if not json_text:
+                    description_logger.debug(
+                        "Found text_parts but joined result is empty. Parts: %s",
+                        text_parts,
+                    )
+                    continue
+                try:
+                    return _parse_json_text(json_text)
+                except json.JSONDecodeError as exc:
+                    description_logger.debug(
+                        "Failed to parse JSON. Error: %s. Text (first 500 chars): %s",
+                        exc,
+                        json_text[:500],
+                    )
+                    raise RuntimeError(f"Failed to parse JSON from response: {exc}")
 
-        raise RuntimeError("OpenAI returned empty description content.")
+        # If we get here, we didn't find any parseable content
+        description_logger.error(
+            "Could not extract content from response. Response structure: %s",
+            json.dumps(response, indent=2, default=str)[:2000],
+        )
+        raise RuntimeError(
+            "OpenAI returned empty description content (no parseable text found)."
+        )
 
     image_payload = await _build_image_payload()
 
@@ -401,7 +512,20 @@ async def generate_frame_description(
 
     try:
         response = await _call_with_retry()
-        content = _extract_content(response)
+        status = response.get("status")
+        if status != "completed":
+            incomplete_details = response.get("incomplete_details") or {}
+            reason = incomplete_details.get("reason", "unknown")
+            logger.error(
+                "OpenAI response incomplete for channel %s at %s (status=%s, reason=%s)",
+                channel_id,
+                captured_at.isoformat(),
+                status,
+                reason,
+            )
+            raise RuntimeError(
+                f"OpenAI response incomplete (status={status}, reason={reason})"
+            )
         try:
             if isinstance(response, dict):
                 payload = response
@@ -413,6 +537,27 @@ async def generate_frame_description(
                 payload = {"raw": str(response)}
         except Exception:
             payload = {"raw": str(response)}
+
+        # Try to extract content
+        try:
+            content = _extract_content(response)
+        except Exception as extract_exc:
+            # Log the full response for debugging - this is critical for understanding the issue
+            description_logger.error(
+                "Failed to extract content from response. Error: %s. Response structure: %s",
+                extract_exc,
+                json.dumps(payload, indent=2, default=str),
+            )
+            _write_response_log(
+                channel_id=channel_id,
+                captured_at=captured_at,
+                response_payload=payload,
+                suffix="extraction_error",
+                prompt=prompt,
+                system_prompt=system_prompt,
+            )
+            raise extract_exc
+
         _write_response_log(
             channel_id=channel_id,
             captured_at=captured_at,
@@ -431,7 +576,7 @@ async def generate_frame_description(
             channel_id,
             captured_at.isoformat(),
         )
-        return content.strip()
+        return content
     except Exception as exc:
         logger.error(
             "Failed to generate visual description for channel %s at %s: %s",
@@ -445,10 +590,22 @@ async def generate_frame_description(
             captured_at.isoformat(),
             exc,
         )
+        # Try to log the response if available
+        try:
+            response = await _call_with_retry()
+            if isinstance(response, dict):
+                error_payload = response
+            elif hasattr(response, "model_dump"):
+                error_payload = response.model_dump()
+            else:
+                error_payload = {"error": str(exc), "raw_response": str(response)}
+        except Exception:
+            error_payload = {"error": str(exc)}
+
         _write_response_log(
             channel_id=channel_id,
             captured_at=captured_at,
-            response_payload={"error": str(exc)},
+            response_payload=error_payload,
             suffix="error",
             prompt=prompt,
             system_prompt=system_prompt,

@@ -103,6 +103,7 @@ class VideoFrame(Base):
     image_path: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[List[float]] = mapped_column(Vector(1536), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    description_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     description_source: Mapped[Optional[str]] = mapped_column(
         String(50), nullable=True
     )
@@ -165,6 +166,7 @@ class Summary(Base):
         TIMESTAMP(timezone=True), nullable=False
     )
     summary_text: Mapped[str] = mapped_column(Text, nullable=False)
+    summary_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     embedding: Mapped[List[float]] = mapped_column(Vector(1536), nullable=False)
     segment_number: Mapped[int] = mapped_column(Integer, nullable=False)
 

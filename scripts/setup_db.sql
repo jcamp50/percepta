@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS video_frames (
   channel_id VARCHAR(255) NOT NULL,
   captured_at TIMESTAMPTZ NOT NULL,
   image_path TEXT NOT NULL,
-  embedding VECTOR(1536) NOT NULL
+  embedding VECTOR(1536) NOT NULL,
+  description_json JSONB
 );
 CREATE INDEX IF NOT EXISTS idx_video_frames_channel_captured
   ON video_frames (channel_id, captured_at DESC);
@@ -88,6 +89,7 @@ CREATE TABLE IF NOT EXISTS summaries (
   start_time TIMESTAMPTZ NOT NULL,
   end_time TIMESTAMPTZ NOT NULL,
   summary_text TEXT NOT NULL,
+  summary_json JSONB,
   embedding VECTOR(1536) NOT NULL,
   segment_number INTEGER NOT NULL
 );

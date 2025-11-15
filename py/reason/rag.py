@@ -34,7 +34,7 @@ class RetrievedChunk:
         return self.started_at + (self.ended_at - self.started_at) / 2
 
 
-DEFAULT_CONTEXT_CHAR_LIMIT = 2000
+DEFAULT_CONTEXT_CHAR_LIMIT = 4000
 DEFAULT_COMPLETION_MODEL = "gpt-4o-mini"
 DEFAULT_TEMPERATURE = 0.4
 MAX_LLM_ATTEMPTS = 4
@@ -197,17 +197,20 @@ class RAGService:
         formatted: List[str] = []
         budget = self.context_char_limit
 
-        for chunk in chunks:
+        for i, chunk in enumerate(chunks):
             text = chunk.text.strip()
             timestamp = _format_timestamp(chunk.midpoint)
             line = f"[{timestamp}] {text}"
-
-            if not selected:
+            
+            # First chunk is always the most recent summary (if present)
+            # Always include it in full, but don't count it towards the budget
+            if i == 0:
                 selected.append(chunk)
                 formatted.append(line)
-                budget -= len(line) + 1
+                # Don't subtract from budget - most recent summary is "free"
                 continue
 
+            # For semantic search results, use the full budget
             if len(line) + 1 > budget:
                 break
 

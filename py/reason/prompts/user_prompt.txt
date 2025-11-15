@@ -12,6 +12,10 @@ Never invent or make up specific timestamps, numbers, or facts. Only use informa
 
 Instructions:
 - Use context entries when they directly contain the answer (include timestamp citations like (~HH:MM:SS))
+- **Context entries may be structured as JSON objects**: Many context entries (especially video frames and summaries) are provided as JSON for better organization
+  - Video frame entries have type "video_frame" and contain: timestamp, description (may be JSON or text), transcript (object with text and timestamps), chat (array of message objects), and metadata (object with game/title info)
+  - Summary entries have type "summary" and contain: segment (start_time, end_time), key_events (array), visual_context (object), chat_highlights (array), streamer_commentary (string), and tone (string)
+  - Parse JSON structures to extract the information you need - the structured format makes it easier to find specific details
 - Context entries may include: transcripts (what the streamer said), events (raids, subs, etc.), chat messages (what viewers said), and video frames (what's visually on screen)
 - Chat messages are marked with [Chat] prefix and include username and message content
 - Video frames are marked with [Video Frame] prefix and represent visual snapshots of the stream
@@ -62,11 +66,13 @@ Question Types and Examples:
    Q: "What was happening when that happened on screen?"
    A: "At ~14:40:10, the video frame shows a boss fight. The aligned transcript shows they were discussing strategy, and chat was excited about the fight." (uses enriched context from video frame)
    
-   NOTE: Video frames are marked with [Video Frame] prefix and include temporally-aligned context:
-   - Transcript: What the streamer was saying at that moment (±5 seconds)
-   - Chat: What viewers were saying in chat at that moment (±5 seconds)
-   - Metadata: Game and title at that moment
-   Use all available aligned context when answering questions about video frames.
+   NOTE: Video frames may be provided as JSON objects with type "video_frame":
+   - The description field may be a JSON object with structured fields (high_level_summary, participants, primary_scene, overlays, etc.) or plain text
+   - Transcript field contains aligned transcript object with text and timestamps
+   - Chat field contains array of chat message objects with username, message, and sent_at
+   - Metadata field contains game/title information at that moment
+   - Parse the JSON structure to extract visual details, aligned context, and metadata
+   - Use all available aligned context when answering questions about video frames
 
 6. SUMMARY QUESTIONS (use summary context entries):
    Q: "What happened recently in the stream?"
@@ -75,9 +81,11 @@ Question Types and Examples:
    Q: "What's been going on?"
    A: "According to the most recent summary, they've been playing for about 2 minutes, focusing on a challenging boss fight with lots of viewer engagement in chat." (from summary context)
    
-   NOTE: Summaries are marked with [Summary] or [Most Recent Summary] prefix and represent 2-minute segments:
-   - [Most Recent Summary] is always included at the top of context entries
-   - [Summary] entries may appear from semantic search if relevant to the question
+   NOTE: Summaries may be provided as JSON objects with type "summary":
+   - The JSON contains: segment (start_time, end_time), key_events (array of event objects), visual_context (object with activities, UI elements, scene changes), chat_highlights (array of chat objects), streamer_commentary (string), and tone (string)
+   - Summaries with "most_recent": true are always included at the top of context entries
+   - Other summary entries may appear from semantic search if relevant to the question
+   - Parse the JSON structure to extract key events, visual context, chat highlights, and commentary
    - Summaries provide high-level overviews of stream activity, events, chat highlights, and visual context
 
 7. INFERENCE QUESTIONS (make reasonable inferences):

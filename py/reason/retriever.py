@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Awaitable, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Dict, List, Optional, Tuple
 
 from py.memory.vector_store import VectorStore
 from py.memory.video_store import VideoStore
@@ -142,53 +143,84 @@ class Retriever:
 
         enriched_results = []
         for r in rows:
-            # Build enriched text representation
-            description = r.get("description")
-            if not description:
+            # Build JSON structure for video frame
+            frame_json: Dict[str, Any] = {
+                "type": "video_frame",
+                "timestamp": (
+                    r["captured_at"].isoformat()
+                    if isinstance(r["captured_at"], datetime)
+                    else str(r["captured_at"])
+                ),
+            }
+
+            # Get description (prefer JSON, fall back to text)
+            description_json = r.get("description_json")
+            description_text = r.get("description")
+            if description_json:
+                frame_json["description"] = description_json
+            elif description_text:
+                frame_json["description"] = description_text
+            else:
+                # Try to generate description
                 try:
-                    description = await self.video_store.generate_description_for_frame(
-                        r["id"]
+                    description_json = (
+                        await self.video_store.generate_description_for_frame(r["id"])
                     )
+                    if description_json:
+                        frame_json["description"] = description_json
                 except Exception as exc:  # pragma: no cover - defensive logging
                     logger.warning(
                         "Failed on-demand description for frame %s: %s",
                         r.get("id"),
                         exc,
                     )
-                    description = None
+                    frame_json["description"] = r.get("image_path", "")
 
-            # Prefer visual description (JCB-41), fall back to image path
-            if description:
-                text_parts = [f"[Video Frame] {description}"]
-            else:
-                text_parts = [f"[Video Frame] {r['image_path']}"]
-
-            # Add transcript text if available
-            transcript_text = None
+            # Add transcript if available
             if r.get("transcript_id") and self.vector_store:
                 try:
                     transcript = await self.vector_store.get_transcript_by_id(
                         r["transcript_id"]
                     )
                     if transcript:
-                        transcript_text = transcript["text"]
-                        text_parts.append(f"Transcript: {transcript_text}")
+                        frame_json["transcript"] = {
+                            "id": transcript.get("id"),
+                            "text": transcript.get("text"),
+                            "started_at": (
+                                transcript.get("started_at").isoformat()
+                                if isinstance(transcript.get("started_at"), datetime)
+                                else str(transcript.get("started_at", ""))
+                            ),
+                            "ended_at": (
+                                transcript.get("ended_at").isoformat()
+                                if isinstance(transcript.get("ended_at"), datetime)
+                                else str(transcript.get("ended_at", ""))
+                            ),
+                        }
                 except Exception:
                     # Log but don't fail if transcript retrieval fails
                     pass
 
             # Add chat messages if available
-            chat_messages = []
             if r.get("aligned_chat_ids") and self.chat_store:
                 try:
                     chat_messages = await self.chat_store.get_messages_by_ids(
                         r["aligned_chat_ids"]
                     )
                     if chat_messages:
-                        chat_text = " | ".join(
-                            [f"{c['username']}: {c['message']}" for c in chat_messages]
-                        )
-                        text_parts.append(f"Chat: {chat_text}")
+                        frame_json["chat"] = [
+                            {
+                                "id": c.get("id"),
+                                "username": c.get("username"),
+                                "message": c.get("message"),
+                                "sent_at": (
+                                    c.get("sent_at").isoformat()
+                                    if isinstance(c.get("sent_at"), datetime)
+                                    else str(c.get("sent_at", ""))
+                                ),
+                            }
+                            for c in chat_messages
+                        ]
                 except Exception:
                     # Log but don't fail if chat retrieval fails
                     pass
@@ -196,15 +228,10 @@ class Retriever:
             # Add metadata if available
             metadata = r.get("metadata_snapshot")
             if metadata:
-                metadata_parts = []
-                if metadata.get("game_name"):
-                    metadata_parts.append(f"Game: {metadata['game_name']}")
-                if metadata.get("title"):
-                    metadata_parts.append(f"Title: {metadata['title']}")
-                if metadata_parts:
-                    text_parts.append(f"Metadata: {' | '.join(metadata_parts)}")
+                frame_json["metadata"] = metadata
 
-            enriched_text = " | ".join(text_parts)
+            # Convert JSON to string for text field
+            enriched_text = json.dumps(frame_json, indent=2)
 
             enriched_results.append(
                 SearchResult(
@@ -313,18 +340,50 @@ class Retriever:
             half_life_minutes=params.half_life_minutes,
             prefilter_limit=params.prefilter_limit,
         )
-        return [
-            SearchResult(
-                id=r["id"],
-                channel_id=r["channel_id"],
-                text=f"[Summary] {r['summary_text']}",
-                started_at=r["start_time"],
-                ended_at=r["end_time"],
-                cosine_distance=float(r["cosine_distance"]),
-                score=float(r["score"]),
+        results = []
+        for r in rows:
+            # Build JSON structure for summary
+            summary_json: Dict[str, Any] = {
+                "type": "summary",
+            }
+
+            # Prefer JSON summary, fall back to text
+            summary_json_data = r.get("summary_json")
+            if summary_json_data:
+                summary_json.update(summary_json_data)
+            else:
+                # Fall back to text summary
+                summary_json["summary_text"] = r.get("summary_text", "")
+
+            # Add segment info
+            summary_json["segment"] = {
+                "start_time": (
+                    r["start_time"].isoformat()
+                    if isinstance(r["start_time"], datetime)
+                    else str(r["start_time"])
+                ),
+                "end_time": (
+                    r["end_time"].isoformat()
+                    if isinstance(r["end_time"], datetime)
+                    else str(r["end_time"])
+                ),
+            }
+
+            # Convert JSON to string for text field
+            summary_text = json.dumps(summary_json, indent=2)
+
+            results.append(
+                SearchResult(
+                    id=r["id"],
+                    channel_id=r["channel_id"],
+                    text=summary_text,
+                    started_at=r["start_time"],
+                    ended_at=r["end_time"],
+                    cosine_distance=float(r["cosine_distance"]),
+                    score=float(r["score"]),
+                )
             )
-            for r in rows
-        ]
+        return results
 
     async def get_most_recent_summary(
         self, *, channel_id: Optional[str]
@@ -346,13 +405,45 @@ class Retriever:
         summary_dict = await self.summarizer.get_most_recent_summary(
             channel_id=channel_id
         )
+
         if not summary_dict:
             return None
+
+        # Build JSON structure for most recent summary
+        summary_json: Dict[str, Any] = {
+            "type": "summary",
+            "most_recent": True,
+        }
+
+        # Prefer JSON summary, fall back to text
+        summary_json_data = summary_dict.get("summary_json")
+        if summary_json_data:
+            summary_json.update(summary_json_data)
+        else:
+            # Fall back to text summary
+            summary_json["summary_text"] = summary_dict.get("summary_text", "")
+
+        # Add segment info
+        summary_json["segment"] = {
+            "start_time": (
+                summary_dict["start_time"].isoformat()
+                if isinstance(summary_dict["start_time"], datetime)
+                else str(summary_dict["start_time"])
+            ),
+            "end_time": (
+                summary_dict["end_time"].isoformat()
+                if isinstance(summary_dict["end_time"], datetime)
+                else str(summary_dict["end_time"])
+            ),
+        }
+
+        # Convert JSON to string for text field
+        summary_text = json.dumps(summary_json, indent=2)
 
         return SearchResult(
             id=summary_dict["id"],
             channel_id=summary_dict["channel_id"],
-            text=f"[Most Recent Summary] {summary_dict['summary_text']}",
+            text=summary_text,
             started_at=summary_dict["start_time"],
             ended_at=summary_dict["end_time"],
             cosine_distance=0.0,  # Not relevant for most recent summary

@@ -6,6 +6,7 @@ import random
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
+import re
 from typing import Any, Dict, List, Optional, Sequence
 
 from openai import OpenAI
@@ -70,6 +71,91 @@ def _load_system_prompt() -> str:
     return SYSTEM_PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 
+def _json_to_text_for_embedding(json_dict: Dict[str, Any]) -> str:
+    """Convert JSON summary dict to text representation for embeddings.
+
+    This preserves semantic markers (field names) while creating a readable
+    text representation suitable for embedding generation.
+
+    Args:
+        json_dict: JSON dict with summary structure
+
+    Returns:
+        Text representation of the JSON structure
+    """
+    if not json_dict:
+        return ""
+
+    parts: List[str] = []
+
+    # Segment info
+    if segment := json_dict.get("segment"):
+        start_time = segment.get("start_time", "")
+        end_time = segment.get("end_time", "")
+        if start_time and end_time:
+            parts.append(f"Segment: {start_time} to {end_time}")
+
+    # Key events
+    if key_events := json_dict.get("key_events"):
+        if isinstance(key_events, list) and key_events:
+            event_parts = []
+            for event in key_events:
+                if isinstance(event, dict):
+                    timestamp = event.get("timestamp", "")
+                    event_name = event.get("event", "")
+                    description = event.get("description", "")
+                    if event_name or description:
+                        event_str = f"{timestamp}: {event_name}"
+                        if description:
+                            event_str += f" - {description}"
+                        event_parts.append(event_str)
+            if event_parts:
+                parts.append(f"Key events: {'; '.join(event_parts)}")
+
+    # Visual context
+    if visual_context := json_dict.get("visual_context"):
+        visual_parts = []
+        if primary_activities := visual_context.get("primary_activities"):
+            if isinstance(primary_activities, list):
+                visual_parts.append(f"Activities: {', '.join(primary_activities)}")
+        if ui_elements := visual_context.get("notable_ui_elements"):
+            if isinstance(ui_elements, list):
+                visual_parts.append(f"UI elements: {', '.join(ui_elements)}")
+        if scene_changes := visual_context.get("scene_changes"):
+            if isinstance(scene_changes, list):
+                visual_parts.append(f"Scene changes: {', '.join(scene_changes)}")
+        if visual_parts:
+            parts.append(f"Visual context: {'; '.join(visual_parts)}")
+
+    # Chat highlights
+    if chat_highlights := json_dict.get("chat_highlights"):
+        if isinstance(chat_highlights, list) and chat_highlights:
+            chat_parts = []
+            for chat in chat_highlights:
+                if isinstance(chat, dict):
+                    timestamp = chat.get("timestamp", "")
+                    username = chat.get("username", "")
+                    message = chat.get("message", "")
+                    significance = chat.get("significance", "")
+                    if username or message:
+                        chat_str = f"{timestamp} {username}: {message}"
+                        if significance:
+                            chat_str += f" ({significance})"
+                        chat_parts.append(chat_str)
+            if chat_parts:
+                parts.append(f"Chat highlights: {'; '.join(chat_parts)}")
+
+    # Streamer commentary
+    if commentary := json_dict.get("streamer_commentary"):
+        parts.append(f"Streamer commentary: {commentary}")
+
+    # Tone
+    if tone := json_dict.get("tone"):
+        parts.append(f"Tone: {tone}")
+
+    return " | ".join(parts)
+
+
 class Summarizer:
     """Memory-propagated summarizer for long-term context retention.
 
@@ -128,60 +214,161 @@ class Summarizer:
                 exc,
             )
 
-    def _build_context(
+    def _build_context_json(
         self,
         *,
         transcripts: List[Dict[str, Any]],
         video_frames: List[Dict[str, Any]],
         chat_messages: List[Dict[str, Any]],
         previous_summary: Optional[str] = None,
+        segment_start: datetime,
+        segment_end: datetime,
     ) -> str:
-        """Build context string from transcripts, video frames, chat, and previous summary.
+        """Build JSON context structure from transcripts, video frames, chat, and previous summary.
+
+        Groups data by video frames (10s windows) with overlapping transcripts and chat.
 
         Args:
             transcripts: List of transcript dicts with text, started_at, ended_at
-            video_frames: List of video frame dicts with description, captured_at
+            video_frames: List of video frame dicts with description_json, captured_at
             chat_messages: List of chat message dicts with username, message, sent_at
             previous_summary: Optional previous segment summary for continuity
+            segment_start: Segment start time
+            segment_end: Segment end time
 
         Returns:
-            Formatted context string
+            JSON string with structured context
         """
-        context_parts: List[str] = []
+        from datetime import timedelta
+
+        # Sort frames by captured_at
+        sorted_frames = sorted(
+            video_frames, key=lambda f: f.get("captured_at", segment_start)
+        )
+
+        windows: List[Dict[str, Any]] = []
+
+        # Group data by video frames (10s windows)
+        for frame in sorted_frames:
+            captured_at = frame.get("captured_at")
+            if not captured_at:
+                continue
+
+            # Create window around frame (±5 seconds)
+            window_start = captured_at - timedelta(seconds=5)
+            window_end = captured_at + timedelta(seconds=5)
+
+            # Get video frame description (prefer JSON, fall back to text)
+            description_json = frame.get("description_json")
+            description_text = frame.get("description")
+
+            video_frame_data: Dict[str, Any] = {
+                "timestamp": (
+                    captured_at.isoformat()
+                    if isinstance(captured_at, datetime)
+                    else str(captured_at)
+                ),
+            }
+
+            if description_json:
+                video_frame_data["description"] = description_json
+            elif description_text:
+                # Old format - use text description
+                video_frame_data["description"] = description_text
+            else:
+                # Fallback to image path
+                video_frame_data["description"] = frame.get("image_path", "")
+
+            # Find overlapping transcripts
+            window_transcripts: List[Dict[str, Any]] = []
+            for transcript in transcripts:
+                started_at = transcript.get("started_at")
+                ended_at = transcript.get("ended_at")
+                if not started_at or not ended_at:
+                    continue
+
+                # Check if transcript overlaps with window
+                # Transcript overlaps if it starts before window_end and ends after window_start
+                if started_at < window_end and ended_at > window_start:
+                    window_transcripts.append(
+                        {
+                            "timestamp": (
+                                started_at.isoformat()
+                                if isinstance(started_at, datetime)
+                                else str(started_at)
+                            ),
+                            "text": transcript.get("text", ""),
+                        }
+                    )
+
+            # Find overlapping chat messages
+            window_chat: List[Dict[str, Any]] = []
+            for chat in chat_messages:
+                sent_at = chat.get("sent_at")
+                if not sent_at:
+                    continue
+
+                # Check if chat message is within window
+                if window_start <= sent_at < window_end:
+                    window_chat.append(
+                        {
+                            "timestamp": (
+                                sent_at.isoformat()
+                                if isinstance(sent_at, datetime)
+                                else str(sent_at)
+                            ),
+                            "username": chat.get("username", ""),
+                            "message": chat.get("message", ""),
+                        }
+                    )
+
+            windows.append(
+                {
+                    "window_start": (
+                        window_start.isoformat()
+                        if isinstance(window_start, datetime)
+                        else str(window_start)
+                    ),
+                    "window_end": (
+                        window_end.isoformat()
+                        if isinstance(window_end, datetime)
+                        else str(window_end)
+                    ),
+                    "video_frame": video_frame_data,
+                    "transcripts": window_transcripts,
+                    "chat_reactions": window_chat,
+                }
+            )
+
+        # Build JSON structure
+        context_data: Dict[str, Any] = {
+            "segment": {
+                "start_time": (
+                    segment_start.isoformat()
+                    if isinstance(segment_start, datetime)
+                    else str(segment_start)
+                ),
+                "end_time": (
+                    segment_end.isoformat()
+                    if isinstance(segment_end, datetime)
+                    else str(segment_end)
+                ),
+                "windows": windows,
+            }
+        }
 
         # Add previous summary if provided
         if previous_summary:
-            context_parts.append(f"Previous segment summary: {previous_summary}")
+            context_data["previous_summary"] = previous_summary
 
-        # Add transcripts
-        for transcript in transcripts:
-            started_at = transcript.get("started_at", "")
-            text_content = transcript.get("text", "")
-            context_parts.append(f"[{started_at}] [Transcript] {text_content}")
+        # If no windows and no previous summary, return empty structure
+        if not windows and not previous_summary:
+            context_data["segment"]["windows"] = []
+            context_data["note"] = (
+                "No transcripts, video frames, or chat messages available for this segment"
+            )
 
-        # Add video frames with descriptions
-        for frame in video_frames:
-            captured_at = frame.get("captured_at", "")
-            description = frame.get("description")
-            if description:
-                context_parts.append(f"[{captured_at}] [Video Frame] {description}")
-            else:
-                # Fallback to image path if description missing
-                image_path = frame.get("image_path", "")
-                context_parts.append(f"[{captured_at}] [Video Frame] {image_path}")
-
-        # Add chat messages
-        for chat in chat_messages:
-            sent_at = chat.get("sent_at", "")
-            username = chat.get("username", "")
-            message = chat.get("message", "")
-            context_parts.append(f"[{sent_at}] [Chat] {username}: {message}")
-
-        if not context_parts:
-            # If no context data available, return a message indicating this
-            return "(No transcripts, video frames, or chat messages available for this segment)"
-
-        return "\n".join(context_parts)
+        return json.dumps(context_data, indent=2)
 
     async def _generate_summary(
         self,
@@ -190,17 +377,17 @@ class Summarizer:
         start_time: datetime,
         end_time: datetime,
         context: str,
-    ) -> str:
+    ) -> Dict[str, Any]:
         """Generate summary using OpenAI Responses API.
 
         Args:
             channel_id: Broadcaster channel ID
             start_time: Segment start time
             end_time: Segment end time
-            context: Formatted context string
+            context: JSON context string
 
         Returns:
-            Generated summary text
+            Generated summary as JSON dict
         """
         if not settings.openai_api_key:
             raise ValueError("OPENAI_API_KEY is required for summary generation.")
@@ -237,20 +424,97 @@ class Summarizer:
             )
             return response
 
-        def _extract_content(response: Dict[str, Any]) -> str:
+        def _strip_markdown_code_blocks(text: str) -> str:
+            """Strip markdown code blocks from text (e.g., ```json ... ```).
+            
+            Args:
+                text: Text that may contain markdown code blocks
+                
+            Returns:
+                Text with markdown code blocks removed
+            """
+            text = text.strip()
+            # Remove ```json or ``` at the start
+            if text.startswith("```"):
+                # Find the first newline after ```
+                first_newline = text.find("\n")
+                if first_newline != -1:
+                    text = text[first_newline + 1 :]
+                else:
+                    # No newline, just remove ```
+                    text = text[3:]
+            # Remove ``` at the end
+            if text.endswith("```"):
+                text = text[:-3]
+            return text.strip()
+
+        def _strip_trailing_commas(text: str) -> str:
+            """Remove trailing commas before closing braces/brackets."""
+            return re.sub(r',(\s*[}\]])', r'\1', text)
+
+        def _parse_json_text(raw_text: str) -> Dict[str, Any]:
+            """Parse cleaned JSON text, repairing trailing commas if needed."""
+            cleaned_text = _strip_markdown_code_blocks(raw_text)
+            try:
+                return json.loads(cleaned_text)
+            except json.JSONDecodeError:
+                repaired_text = _strip_trailing_commas(cleaned_text)
+                if repaired_text != cleaned_text:
+                    try:
+                        return json.loads(repaired_text)
+                    except json.JSONDecodeError:
+                        pass
+                raise
+
+        def _extract_content(response: Dict[str, Any]) -> Dict[str, Any]:
+            """Extract JSON content from OpenAI response and parse it.
+            
+            Returns:
+                Parsed JSON dict with summary structure
+            """
             if not isinstance(response, dict):
                 raise RuntimeError(
                     "Unexpected response type from OpenAI Responses API."
                 )
 
+            # First, check for the convenience field if present
             convenience_text = response.get("output_text")
             if isinstance(convenience_text, str) and convenience_text.strip():
-                return convenience_text
+                try:
+                    return _parse_json_text(convenience_text)
+                except json.JSONDecodeError as exc:
+                    summary_logger.debug(
+                        "Failed to parse output_text as JSON: %s. Raw text: %s",
+                        exc,
+                        convenience_text[:200] if convenience_text else "empty",
+                    )
+                    raise RuntimeError(f"Failed to parse JSON from output_text: {exc}")
 
+            # Check output array
             output_items = response.get("output") or []
+            if not output_items:
+                summary_logger.error(
+                    "No output items found in response. Response keys: %s. Full response: %s",
+                    list(response.keys()) if isinstance(response, dict) else "not a dict",
+                    json.dumps(response, indent=2, default=str)[:2000],
+                )
+                raise RuntimeError("OpenAI returned empty summary content (no output items).")
+            
+            # Try to extract from output items
             for item in output_items:
                 if not isinstance(item, dict):
                     continue
+                
+                # Check if item has text directly (some response formats)
+                if "text" in item:
+                    text_value = item.get("text")
+                    if isinstance(text_value, str) and text_value.strip():
+                        try:
+                            return _parse_json_text(text_value)
+                        except json.JSONDecodeError:
+                            pass
+                
+                # Check message type items
                 if item.get("type") != "message":
                     continue
 
@@ -262,17 +526,42 @@ class Summarizer:
                     part_type = part.get("type")
                     if part_type == "output_text":
                         text_value = part.get("text")
-                        if isinstance(text_value, str):
+                        if isinstance(text_value, str) and text_value.strip():
                             text_parts.append(text_value)
                     elif part_type == "output_image_text":
                         text_value = part.get("text")
-                        if isinstance(text_value, str):
+                        if isinstance(text_value, str) and text_value.strip():
+                            text_parts.append(text_value)
+                    # Also check for direct text field
+                    elif "text" in part:
+                        text_value = part.get("text")
+                        if isinstance(text_value, str) and text_value.strip():
                             text_parts.append(text_value)
 
                 if text_parts:
-                    return "".join(text_parts)
+                    json_text = "".join(text_parts).strip()
+                    if not json_text:
+                        summary_logger.debug(
+                            "Found text_parts but joined result is empty. Parts: %s",
+                            text_parts,
+                        )
+                        continue
+                    try:
+                        return _parse_json_text(json_text)
+                    except json.JSONDecodeError as exc:
+                        summary_logger.debug(
+                            "Failed to parse JSON. Error: %s. Text (first 500 chars): %s",
+                            exc,
+                            json_text[:500],
+                        )
+                        raise RuntimeError(f"Failed to parse JSON from response: {exc}")
 
-            raise RuntimeError("OpenAI returned empty summary content.")
+            # If we get here, we didn't find any parseable content
+            summary_logger.error(
+                "Could not extract content from response. Response structure: %s",
+                json.dumps(response, indent=2, default=str)[:2000],
+            )
+            raise RuntimeError("OpenAI returned empty summary content (no parseable text found).")
 
         async def _call_with_retry() -> Dict[str, Any]:
             last_error: Optional[Exception] = None
@@ -371,7 +660,7 @@ class Summarizer:
                 start_time.isoformat(),
                 end_time.isoformat(),
             )
-            return content.strip()
+            return content
         except Exception as exc:
             logger.error(
                 "Failed to generate summary for channel %s between %s and %s: %s",
@@ -412,7 +701,7 @@ class Summarizer:
         start_time: datetime,
         end_time: datetime,
         previous_summary: Optional[str] = None,
-    ) -> str:
+    ) -> Dict[str, Any]:
         """Generate summary for a 2-minute segment.
 
         Args:
@@ -458,11 +747,13 @@ class Summarizer:
         )
 
         # 3. Build context
-        context = self._build_context(
+        context = self._build_context_json(
             transcripts=transcripts,
             video_frames=video_frames,
             chat_messages=chat_messages,
             previous_summary=previous_summary,
+            segment_start=start_time,
+            segment_end=end_time,
         )
 
         # 4. Generate summary via LLM
@@ -481,7 +772,7 @@ class Summarizer:
         channel_id: str,
         start_time: datetime,
         end_time: datetime,
-        summary_text: str,
+        summary_json: Dict[str, Any],
         segment_number: int,
     ) -> str:
         """Store summary in database with embedding.
@@ -490,7 +781,7 @@ class Summarizer:
             channel_id: Broadcaster channel ID
             start_time: Segment start time
             end_time: Segment end time
-            summary_text: Generated summary text
+            summary_json: Generated summary as JSON dict
             segment_number: Segment number for ordering
 
         Returns:
@@ -498,8 +789,12 @@ class Summarizer:
         """
         import uuid
 
-        # Generate embedding for summary
-        embedding = await embed_text(summary_text)
+        # Generate text representation from JSON for description field
+        summary_text = _json_to_text_for_embedding(summary_json)
+
+        # Generate embedding from JSON string for semantic search
+        json_string = json.dumps(summary_json, sort_keys=True)
+        embedding = await embed_text(json_string)
 
         new_id = uuid.uuid4()
         async with self.session_factory() as session:
@@ -509,6 +804,7 @@ class Summarizer:
                 start_time=start_time,
                 end_time=end_time,
                 summary_text=summary_text,
+                summary_json=summary_json,
                 embedding=embedding,
                 segment_number=segment_number,
             )
@@ -607,7 +903,7 @@ class Summarizer:
             or None if no summaries exist
         """
         sql = """
-        SELECT id, channel_id, summary_text, start_time, end_time, segment_number
+        SELECT id, channel_id, summary_text, summary_json, start_time, end_time, segment_number
         FROM summaries
         WHERE channel_id = :channel_id
         ORDER BY segment_number DESC
@@ -625,6 +921,7 @@ class Summarizer:
                     "id": str(row["id"]),
                     "channel_id": row["channel_id"],
                     "summary_text": row["summary_text"],
+                    "summary_json": row.get("summary_json"),
                     "start_time": row["start_time"],
                     "end_time": row["end_time"],
                     "segment_number": row["segment_number"],
@@ -637,7 +934,7 @@ class Summarizer:
         channel_id: str,
         start_time: datetime,
         end_time: datetime,
-    ) -> tuple[str, str]:
+    ) -> tuple[Dict[str, Any], str]:
         """Generate summary with memory propagation (includes previous summary).
 
         Args:
@@ -646,7 +943,7 @@ class Summarizer:
             end_time: Segment end time
 
         Returns:
-            Tuple of (summary_text, summary_id)
+            Tuple of (summary_json, summary_id)
         """
         # Get next segment number
         segment_number = await self.get_next_segment_number(channel_id=channel_id)
@@ -657,7 +954,7 @@ class Summarizer:
         )
 
         # Generate summary with propagated memory
-        summary_text = await self.summarize_segment(
+        summary_json = await self.summarize_segment(
             channel_id=channel_id,
             start_time=start_time,
             end_time=end_time,
@@ -669,11 +966,11 @@ class Summarizer:
             channel_id=channel_id,
             start_time=start_time,
             end_time=end_time,
-            summary_text=summary_text,
+            summary_json=summary_json,
             segment_number=segment_number,
         )
 
-        return (summary_text, summary_id)
+        return (summary_json, summary_id)
 
     async def select_relevant_summaries(
         self,
@@ -706,14 +1003,15 @@ class Summarizer:
         cosine_order = "embedding <=> (:vec)::vector"
         sql = f"""
             WITH pre AS (
-            SELECT id, channel_id, summary_text, start_time, end_time, segment_number,
+            SELECT id, channel_id, summary_text, summary_json, start_time, end_time, segment_number,
                     {cosine_order} AS dist
             FROM summaries
             WHERE channel_id = :channel_id
+            AND embedding IS NOT NULL
             ORDER BY {cosine_order}
             LIMIT :k
             )
-            SELECT id, channel_id, summary_text, start_time, end_time, segment_number, dist,
+            SELECT id, channel_id, summary_text, summary_json, start_time, end_time, segment_number, dist,
                 dist / POWER(2, EXTRACT(EPOCH FROM (NOW() - end_time)) / :half_life_seconds) AS score
             FROM pre
             ORDER BY score ASC
@@ -747,6 +1045,7 @@ class Summarizer:
                     "id": str(row["id"]),
                     "channel_id": row["channel_id"],
                     "summary_text": row["summary_text"],
+                    "summary_json": row.get("summary_json"),
                     "start_time": row["start_time"],
                     "end_time": row["end_time"],
                     "segment_number": row["segment_number"],

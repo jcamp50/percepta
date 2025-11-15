@@ -11,6 +11,7 @@ import asyncio
 import time
 import os
 import uuid
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -25,6 +26,7 @@ from py.config import settings
 from py.utils.logging import get_logger
 from py.utils.video_embeddings import generate_clip_embedding
 from py.utils.video_descriptions import generate_frame_description
+from py.utils.embeddings import embed_text
 
 logger = get_logger(__name__, category="video")
 description_logger = get_logger(__name__, category="video_description")
@@ -47,6 +49,104 @@ def _vector_literal(values: List[float]) -> str:
         return "[]"
     # Format with reasonable precision; pgvector parses standard floats
     return "[" + ",".join(f"{v:.8f}" for v in values) + "]"
+
+
+def _json_to_text_for_embedding(json_dict: Dict[str, Any]) -> str:
+    """Convert JSON description dict to text representation for embeddings.
+    
+    This preserves semantic markers (field names) while creating a readable
+    text representation suitable for embedding generation.
+    
+    Args:
+        json_dict: JSON dict with video frame description structure
+        
+    Returns:
+        Text representation of the JSON structure
+    """
+    if not json_dict:
+        return ""
+    
+    parts: List[str] = []
+    
+    # High-level summary
+    if high_level := json_dict.get("high_level_summary"):
+        parts.append(f"Summary: {high_level}")
+    
+    # Participants
+    if participants := json_dict.get("participants"):
+        if streamer := participants.get("streamer"):
+            appearance = streamer.get("appearance", "")
+            posture = streamer.get("posture", "")
+            expression = streamer.get("expression", "")
+            if appearance or posture or expression:
+                parts.append(f"Streamer: {appearance}")
+                if posture:
+                    parts.append(f"Posture: {posture}")
+                if expression:
+                    parts.append(f"Expression: {expression}")
+    
+    # Primary scene
+    if primary_scene := json_dict.get("primary_scene"):
+        activity = primary_scene.get("activity", "")
+        location = primary_scene.get("location", "")
+        actions = primary_scene.get("actions", [])
+        if activity:
+            parts.append(f"Activity: {activity}")
+        if location:
+            parts.append(f"Location: {location}")
+        if actions:
+            parts.append(f"Actions: {', '.join(actions)}")
+    
+    # On-screen media
+    if on_screen_media := json_dict.get("on_screen_media"):
+        if isinstance(on_screen_media, list) and on_screen_media:
+            media_descriptions = []
+            for media in on_screen_media:
+                if isinstance(media, dict):
+                    media_type = media.get("type", "")
+                    title = media.get("title", "")
+                    desc = media.get("description", "")
+                    if media_type or title or desc:
+                        media_descriptions.append(f"{media_type}: {title} - {desc}")
+            if media_descriptions:
+                parts.append(f"On-screen media: {'; '.join(media_descriptions)}")
+    
+    # Environment
+    if environment := json_dict.get("environment"):
+        physical_space = environment.get("physical_space", "")
+        lighting = environment.get("lighting", "")
+        props = environment.get("props", [])
+        if physical_space:
+            parts.append(f"Environment: {physical_space}")
+        if lighting:
+            parts.append(f"Lighting: {lighting}")
+        if props:
+            parts.append(f"Props: {', '.join(props)}")
+    
+    # Overlays
+    if overlays := json_dict.get("overlays"):
+        overlay_parts = []
+        if alerts := overlays.get("alerts"):
+            overlay_parts.append(f"Alerts: {', '.join(alerts)}")
+        if captions := overlays.get("captions"):
+            overlay_parts.append(f"Captions: {', '.join(captions)}")
+        if notifications := overlays.get("notifications"):
+            overlay_parts.append(f"Notifications: {', '.join(notifications)}")
+        if gameplay_hud := overlays.get("gameplay_hud"):
+            hud_parts = []
+            for key, value in gameplay_hud.items():
+                if value:
+                    hud_parts.append(f"{key}: {value}")
+            if hud_parts:
+                overlay_parts.append(f"HUD: {', '.join(hud_parts)}")
+        if overlay_parts:
+            parts.append(f"Overlays: {'; '.join(overlay_parts)}")
+    
+    # Overall impression
+    if impression := json_dict.get("overall_impression"):
+        parts.append(f"Impression: {impression}")
+    
+    return " | ".join(parts)
 
 
 class VideoStore:
@@ -337,6 +437,7 @@ class VideoStore:
             )
 
         # Determine whether we can reuse a cached description
+        description_json = None
         description = None
         description_source = None
         similar_frame_id: Optional[str] = None
@@ -352,9 +453,19 @@ class VideoStore:
                     require_description=True,
                 )
                 if similar_frame:
-                    description = similar_frame["description"]
-                    description_source = "cache"
+                    # Try to get JSON description first, fall back to text
                     similar_frame_id = similar_frame["id"]
+                    async with self.session_factory() as session:
+                        similar_frame_obj = await session.get(VideoFrame, uuid.UUID(similar_frame_id))
+                        if similar_frame_obj and similar_frame_obj.description_json:
+                            description_json = similar_frame_obj.description_json
+                            description = _json_to_text_for_embedding(description_json)
+                        elif similar_frame.get("description"):
+                            # Old format - just text, convert to JSON-like structure
+                            description = similar_frame["description"]
+                            # For cached descriptions, we'll store as text only
+                            # The JSON will be regenerated if needed
+                    description_source = "cache"
                     description_logger.info(
                         "Frame %s reused description from frame %s (hash distance <= %s)",
                         new_id,
@@ -371,7 +482,7 @@ class VideoStore:
             chat, transcript
         )
 
-        if description is None:
+        if description_json is None:
             if interesting_flag:
                 try:
                     previous_description = await self._get_previous_frame_description(
@@ -383,7 +494,7 @@ class VideoStore:
                         interesting_flag,
                         len(chat) if chat else 0,
                     )
-                    description = await self._generate_description(
+                    description_json = await self._generate_description(
                         image_path=dest_path,
                         channel_id=channel_id,
                         captured_at=captured_at,
@@ -393,6 +504,8 @@ class VideoStore:
                         chat=chat,
                         metadata=metadata_snapshot,
                     )
+                    # Generate text representation from JSON
+                    description = _json_to_text_for_embedding(description_json)
                     description_source = "immediate"
                 except Exception as exc:
                     logger.warning(
@@ -404,6 +517,7 @@ class VideoStore:
                         new_id,
                         exc,
                     )
+                    description_json = None
                     description = None
                     description_source = "lazy"
             else:
@@ -424,6 +538,7 @@ class VideoStore:
                 image_path=dest_path,
                 embedding=embedding,
                 description=description,
+                description_json=description_json,
                 description_source=description_source,
                 frame_hash=frame_hash,
                 transcript_id=transcript_id,
@@ -670,8 +785,12 @@ class VideoStore:
 
         return False
 
-    async def generate_description_for_frame(self, frame_id: str) -> Optional[str]:
-        """Generate (or regenerate) description for a stored frame."""
+    async def generate_description_for_frame(self, frame_id: str) -> Optional[Dict[str, Any]]:
+        """Generate (or regenerate) description for a stored frame.
+        
+        Returns:
+            JSON dict with video frame description structure, or None if failed
+        """
         lock = self._description_locks.get(frame_id)
         if lock is None:
             lock = asyncio.Lock()
@@ -689,9 +808,9 @@ class VideoStore:
                         )
                         return None
 
-                    # If description already exists and was not marked lazy, return it
-                    if frame.description and frame.description_source != "lazy":
-                        return frame.description
+                    # If description JSON already exists and was not marked lazy, return it
+                    if frame.description_json and frame.description_source != "lazy":
+                        return frame.description_json
 
                     transcript = None
                     if frame.transcript_id:
@@ -735,7 +854,7 @@ class VideoStore:
 
                     try:
                         start_time = time.perf_counter()
-                        description = await self._generate_description(
+                        description_json = await self._generate_description(
                             image_path=frame.image_path,
                             channel_id=frame.channel_id,
                             captured_at=frame.captured_at,
@@ -745,6 +864,24 @@ class VideoStore:
                             metadata=metadata_snapshot,
                         )
                         duration_ms = (time.perf_counter() - start_time) * 1000
+                        
+                        # Generate text representation from JSON for description field
+                        description_text = _json_to_text_for_embedding(description_json)
+                        
+                        # Update frame with JSON description and text representation
+                        frame.description_json = description_json
+                        frame.description = description_text
+                        frame.description_source = "generated"
+                        # Note: Video frames use CLIP embeddings (image-based), not text embeddings
+                        
+                        await session.commit()
+                        
+                        description_logger.info(
+                            "Generated description for frame %s in %.2fms",
+                            frame_id,
+                            duration_ms,
+                        )
+                        return description_json
                     except Exception as exc:
                         logger.warning(
                             f"Failed to generate description for frame {frame_id}: {exc}",
@@ -825,7 +962,14 @@ class VideoStore:
         transcript: Optional[Dict[str, Any]] = None,
         chat: Optional[List[Dict[str, Any]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
-    ) -> str:
+    ) -> Dict[str, Any]:
+        """Generate JSON description for a video frame.
+        
+        Returns:
+            JSON dict with video frame description structure
+        """
+        # Convert previous_frame_description from text to JSON if needed
+        # (for now, we'll pass it as-is since it might be from old format)
         return await generate_frame_description(
             image_path=image_path,
             channel_id=channel_id,
@@ -925,7 +1069,7 @@ class VideoStore:
     ) -> List[Dict[str, Any]]:
         """Return frames (with descriptions if available) within a time range."""
         sql = """
-        SELECT id, captured_at, image_path, description, description_source
+        SELECT id, captured_at, image_path, description, description_json, description_source
         FROM video_frames
         WHERE channel_id = :channel_id
           AND captured_at >= :start_time
@@ -950,6 +1094,7 @@ class VideoStore:
                 "captured_at": row["captured_at"],
                 "image_path": row["image_path"],
                 "description": row["description"],
+                "description_json": row.get("description_json"),  # Include JSON if available
                 "description_source": row["description_source"],
             }
             for row in rows
