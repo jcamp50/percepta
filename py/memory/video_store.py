@@ -24,7 +24,7 @@ from py.database.connection import SessionLocal
 from py.database.models import VideoFrame, Transcript, ChatMessage, ChannelSnapshot
 from py.config import settings
 from py.utils.logging import get_logger
-from py.utils.video_embeddings import generate_clip_embedding
+from py.utils.video_embeddings import generate_clip_embedding, create_grounded_embedding
 from py.utils.video_descriptions import generate_frame_description
 from py.utils.embeddings import embed_text
 
@@ -520,14 +520,32 @@ class VideoStore:
                     description_json = None
                     description = None
                     description_source = "lazy"
-            else:
-                description_source = "lazy"
-                description_logger.info(
-                    "Queued frame %s for lazy description (chat=%s, interesting=%s)",
-                    new_id,
-                    len(chat) if chat else 0,
-                    interesting_flag,
+                else:
+                    description_source = "lazy"
+                    description_logger.info(
+                        "Queued frame %s for lazy description (chat=%s, interesting=%s)",
+                        new_id,
+                        len(chat) if chat else 0,
+                        interesting_flag,
+                    )
+
+        # Generate grounded embedding if description is available
+        grounded_embedding = None
+        if description and description.strip():
+            try:
+                grounded_embedding = await create_grounded_embedding(
+                    clip_embedding=embedding,
+                    description_text=description,
                 )
+                logger.debug(
+                    f"Generated grounded embedding for frame {new_id}"
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"Failed to generate grounded embedding for frame {new_id}: {exc}",
+                    exc_info=True,
+                )
+                # Continue without grounded embedding - frame will still be stored
 
         # Store in database with context references
         async with self.session_factory() as session:
@@ -537,6 +555,7 @@ class VideoStore:
                 captured_at=captured_at,
                 image_path=dest_path,
                 embedding=embedding,
+                grounded_embedding=grounded_embedding,
                 description=description,
                 description_json=description_json,
                 description_source=description_source,
@@ -587,6 +606,7 @@ class VideoStore:
         half_life_minutes: int = 60,
         channel_id: Optional[str] = None,
         prefilter_limit: int = 200,
+        use_grounded: bool = True,
     ) -> List[Dict[str, Any]]:
         """Search video frames using vector similarity with time-decay scoring.
 
@@ -596,6 +616,8 @@ class VideoStore:
             half_life_minutes: Half-life for time decay scoring (default: 60 minutes)
             channel_id: Optional channel ID to filter by
             prefilter_limit: Maximum candidates to consider before time decay
+            use_grounded: If True, use grounded embeddings (preferring grounded_embedding, falling back to embedding).
+                         If False, use pure CLIP embeddings only.
 
         Returns:
             List of frame dictionaries with scores
@@ -606,14 +628,31 @@ class VideoStore:
         vec_str = _vector_literal(query_embedding)
         half_life_seconds = half_life_minutes * 60
 
-        cosine_order = "embedding <=> (:vec)::vector"
+        # Choose embedding column based on use_grounded flag
+        # If use_grounded is True, prefer grounded_embedding but fall back to embedding if not available
+        if use_grounded:
+            # Use COALESCE to prefer grounded_embedding, fall back to embedding
+            cosine_order = "COALESCE(grounded_embedding, embedding) <=> (:vec)::vector"
+            embedding_select = "COALESCE(grounded_embedding, embedding) <=> (:vec)::vector AS dist"
+        else:
+            # Use pure CLIP embedding
+            cosine_order = "embedding <=> (:vec)::vector"
+            embedding_select = "embedding <=> (:vec)::vector AS dist"
+
+        # Build WHERE clause for embedding existence check
+        if use_grounded:
+            embedding_where = "AND (grounded_embedding IS NOT NULL OR embedding IS NOT NULL)"
+        else:
+            embedding_where = "AND embedding IS NOT NULL"
+
         sql = f"""
             WITH pre AS (
             SELECT id, channel_id, captured_at, image_path, transcript_id, aligned_chat_ids, metadata_snapshot,
                     description, description_source, frame_hash,
-                    {cosine_order} AS dist
+                    {embedding_select}
             FROM video_frames
             WHERE (:channel_id IS NULL OR channel_id = :channel_id)
+            {embedding_where}
             ORDER BY {cosine_order}
             LIMIT :k
             )
@@ -868,11 +907,30 @@ class VideoStore:
                         # Generate text representation from JSON for description field
                         description_text = _json_to_text_for_embedding(description_json)
                         
-                        # Update frame with JSON description and text representation
+                        # Generate grounded embedding now that description is available
+                        grounded_embedding = None
+                        if description_text and description_text.strip():
+                            try:
+                                grounded_embedding = await create_grounded_embedding(
+                                    clip_embedding=frame.embedding,
+                                    description_text=description_text,
+                                )
+                                logger.debug(
+                                    f"Generated grounded embedding for frame {frame_id} after description"
+                                )
+                            except Exception as exc:
+                                logger.warning(
+                                    f"Failed to generate grounded embedding for frame {frame_id}: {exc}",
+                                    exc_info=True,
+                                )
+                                # Continue without grounded embedding
+                        
+                        # Update frame with JSON description, text representation, and grounded embedding
                         frame.description_json = description_json
                         frame.description = description_text
                         frame.description_source = "generated"
-                        # Note: Video frames use CLIP embeddings (image-based), not text embeddings
+                        if grounded_embedding:
+                            frame.grounded_embedding = grounded_embedding
                         
                         await session.commit()
                         

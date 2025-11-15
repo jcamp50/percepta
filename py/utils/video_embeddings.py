@@ -15,6 +15,7 @@ import numpy as np
 from PIL import Image
 
 from py.utils.logging import get_logger
+from py.utils.embeddings import embed_text
 
 logger = get_logger(__name__, category="video")
 
@@ -160,4 +161,75 @@ async def generate_clip_embedding(image_path: str) -> List[float]:
     except Exception as e:
         logger.error(f"Failed to generate CLIP embedding for {image_path}: {e}")
         raise
+
+
+async def create_grounded_embedding(
+    clip_embedding: List[float], description_text: str
+) -> List[float]:
+    """Create a grounded embedding by fusing CLIP visual embedding with description text embedding.
+    
+    Uses weighted fusion: 70% CLIP embedding + 30% description text embedding.
+    Both embeddings are normalized before fusion to maintain cosine similarity properties.
+    
+    Args:
+        clip_embedding: CLIP embedding vector (1536 dimensions, already projected)
+        description_text: Text description of the video frame (required)
+    
+    Returns:
+        Grounded embedding vector (1536 dimensions) combining visual and text context
+    
+    Raises:
+        ValueError: If embeddings have incorrect dimensions
+    """
+    if not description_text or not description_text.strip():
+        raise ValueError("description_text is required for grounded embedding")
+    
+    # Validate CLIP embedding dimension
+    clip_array = np.array(clip_embedding, dtype=np.float32)
+    if len(clip_array) != TARGET_EMBEDDING_DIM:
+        raise ValueError(
+            f"Expected CLIP embedding dimension {TARGET_EMBEDDING_DIM}, got {len(clip_array)}"
+        )
+    
+    # Generate text embedding from description
+    text_embedding = await embed_text(description_text)
+    text_array = np.array(text_embedding, dtype=np.float32)
+    
+    # Validate text embedding dimension
+    if len(text_array) != TARGET_EMBEDDING_DIM:
+        raise ValueError(
+            f"Expected text embedding dimension {TARGET_EMBEDDING_DIM}, got {len(text_array)}"
+        )
+    
+    # Normalize both embeddings to unit vectors (preserves cosine similarity)
+    clip_norm = np.linalg.norm(clip_array)
+    if clip_norm > 0:
+        clip_normalized = clip_array / clip_norm
+    else:
+        clip_normalized = clip_array / np.sqrt(TARGET_EMBEDDING_DIM)
+    
+    text_norm = np.linalg.norm(text_array)
+    if text_norm > 0:
+        text_normalized = text_array / text_norm
+    else:
+        text_normalized = text_array / np.sqrt(TARGET_EMBEDDING_DIM)
+    
+    # Weighted fusion: 70% CLIP + 30% text
+    CLIP_WEIGHT = 0.7
+    TEXT_WEIGHT = 0.3
+    
+    fused = CLIP_WEIGHT * clip_normalized + TEXT_WEIGHT * text_normalized
+    
+    # Normalize the fused result to maintain unit vector
+    fused_norm = np.linalg.norm(fused)
+    if fused_norm > 0:
+        fused_normalized = fused / fused_norm
+    else:
+        fused_normalized = fused / np.sqrt(TARGET_EMBEDDING_DIM)
+    
+    logger.debug(
+        f"Created grounded embedding: CLIP ({CLIP_WEIGHT*100:.0f}%) + Text ({TEXT_WEIGHT*100:.0f}%)"
+    )
+    
+    return fused_normalized.tolist()
 

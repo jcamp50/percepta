@@ -102,6 +102,9 @@ class VideoFrame(Base):
     )
     image_path: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[List[float]] = mapped_column(Vector(1536), nullable=False)
+    grounded_embedding: Mapped[Optional[List[float]]] = mapped_column(
+        Vector(1536), nullable=True
+    )
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     description_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     description_source: Mapped[Optional[str]] = mapped_column(
@@ -126,6 +129,13 @@ class VideoFrame(Base):
             postgresql_using="ivfflat",
             postgresql_with={"lists": 100},
             postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+        Index(
+            "idx_video_frames_grounded_embedding",
+            "grounded_embedding",
+            postgresql_using="ivfflat",
+            postgresql_with={"lists": 100},
+            postgresql_ops={"grounded_embedding": "vector_cosine_ops"},
         ),
     )
 

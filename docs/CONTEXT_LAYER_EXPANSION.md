@@ -504,13 +504,13 @@ class ContinualGrounding:
   - [ ] Implement `_find_aligned_chat()` method
   - [ ] Update retrieval to include context
 
-- [ ] **Joint Embedding Fusion**
-  - [ ] Create `create_grounded_embedding()` function
-  - [ ] Add `grounded_embedding` field to model
-  - [ ] Implement fusion logic (weighted average)
-  - [ ] Add index for grounded embeddings
-  - [ ] Update search to support both embeddings
-  - [ ] Experiment with fusion weights
+- [x] **Joint Embedding Fusion** ✅ **COMPLETE (JCB-37)**
+  - [x] Create `create_grounded_embedding()` function
+  - [x] Add `grounded_embedding` field to model
+  - [x] Implement fusion logic (weighted average: 70% CLIP + 30% description)
+  - [x] Add index for grounded embeddings
+  - [x] Update search to support `use_grounded` flag (default: True)
+  - [x] Search uses grounded embeddings by default for better text query performance
 
 - [ ] **Testing**
   - [ ] Test temporal alignment accuracy
@@ -1040,7 +1040,9 @@ async def retrieve_video_with_context(
 **Future Enhancements** (Post-MVP):
 - **Local Models**: Consider LLaVA or Qwen-VL for cost reduction at scale
 - **Description Embeddings**: Generate embeddings from descriptions for better text search
-- **Joint Embedding Fusion**: Combine CLIP + description embeddings (JCB-37)
+- **Joint Embedding Fusion**: ✅ **COMPLETE** - Combine CLIP + description embeddings (JCB-37)
+  - Grounded embeddings (70% CLIP + 30% description) stored in `grounded_embedding` field
+  - Search uses grounded embeddings by default for better text query performance
 - **Adaptive Quality**: Use lower detail for similar frames, high detail for unique frames
 
 #### Implementation Checklist

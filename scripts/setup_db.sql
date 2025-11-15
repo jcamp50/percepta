@@ -183,5 +183,22 @@ BEGIN
     CREATE INDEX idx_video_frames_description_source 
       ON video_frames(channel_id, description_source);
   END IF;
+
+  -- Add grounded_embedding column (JCB-37: Joint Embedding Fusion)
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_name = 'video_frames' AND column_name = 'grounded_embedding'
+  ) THEN
+    ALTER TABLE video_frames
+    ADD COLUMN grounded_embedding VECTOR(1536);
+  END IF;
+
+  -- Create index for grounded_embedding if it does not exist
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_class WHERE relname = 'idx_video_frames_grounded_embedding'
+  ) THEN
+    CREATE INDEX idx_video_frames_grounded_embedding
+      ON video_frames USING ivfflat (grounded_embedding vector_cosine_ops) WITH (lists = 100);
+  END IF;
 END $$;
 
