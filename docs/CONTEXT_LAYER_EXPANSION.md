@@ -15,11 +15,12 @@ This guide provides actionable steps to enhance Percepta's context layer from cu
 
 ## Quick Wins (MVP 1.5)
 
-### 1. Video Frame Embeddings
+### 1. Video Frame Embeddings ✅ **COMPLETE (JCB-31)**
 
 **Priority**: High  
 **Effort**: Medium  
-**Impact**: High
+**Impact**: High  
+**Status**: ✅ **DONE**
 
 #### Implementation Steps
 
@@ -81,11 +82,12 @@ This guide provides actionable steps to enhance Percepta's context layer from cu
 
 ---
 
-### 1.5. Grounding CLIP Embeddings with Context
+### 1.5. Grounding CLIP Embeddings with Context ✅ **COMPLETE (JCB-33, JCB-37)**
 
 **Priority**: High  
 **Effort**: Medium  
-**Impact**: High
+**Impact**: High  
+**Status**: ✅ **DONE** - Both temporal alignment (JCB-33) and joint embedding fusion (JCB-37) implemented
 
 #### Why Ground CLIP Embeddings?
 
@@ -99,9 +101,10 @@ Grounding enriches embeddings with this context, enabling:
 - Richer context understanding
 - Improved retrieval accuracy
 
-#### Approach 1: Temporal Alignment (Simplest - MVP)
+#### Approach 1: Temporal Alignment ✅ **COMPLETE (JCB-33)**
 
-**Concept**: Link video frames to temporally-aligned context without modifying embeddings.
+**Concept**: Link video frames to temporally-aligned context without modifying embeddings.  
+**Status**: ✅ **DONE** - Implemented in `py/memory/video_store.py`
 
 **Implementation**:
 
@@ -190,9 +193,10 @@ async def retrieve_video_with_context(
 
 ---
 
-#### Approach 2: Joint Embedding Fusion (Advanced - Post-MVP)
+#### Approach 2: Joint Embedding Fusion ✅ **COMPLETE (JCB-37)**
 
-**Concept**: Combine CLIP embedding with text embeddings from aligned context into unified representation.
+**Concept**: Combine CLIP embedding with text embeddings from aligned context into unified representation.  
+**Status**: ✅ **DONE** - Implemented in `py/utils/video_embeddings.py` with 70/30 CLIP+description fusion
 
 **Implementation**:
 
@@ -496,13 +500,13 @@ class ContinualGrounding:
 
 #### Implementation Checklist
 
-- [ ] **Temporal Alignment**
-  - [ ] Add `transcript_id` field to `VideoFrame` model
-  - [ ] Add `aligned_chat_ids` array field
-  - [ ] Add `metadata_snapshot` JSONB field
-  - [ ] Implement `_find_aligned_transcript()` method
-  - [ ] Implement `_find_aligned_chat()` method
-  - [ ] Update retrieval to include context
+- [x] **Temporal Alignment** ✅ **COMPLETE (JCB-33)**
+  - [x] Add `transcript_id` field to `VideoFrame` model
+  - [x] Add `aligned_chat_ids` array field
+  - [x] Add `metadata_snapshot` JSONB field
+  - [x] Implement `_find_aligned_transcript()` method
+  - [x] Implement `_find_aligned_chat()` method
+  - [x] Update retrieval to include context (`retrieve_video_with_context()`)
 
 - [x] **Joint Embedding Fusion** ✅ **COMPLETE (JCB-37)**
   - [x] Create `create_grounded_embedding()` function
@@ -1047,37 +1051,37 @@ async def retrieve_video_with_context(
 
 #### Implementation Checklist
 
-- [ ] **Database Schema**
-  - [ ] Add `description` field to `VideoFrame` model
-  - [ ] Add `description_source` field
-  - [ ] Add `frame_hash` field for caching
-  - [ ] Add indexes for cache lookups and lazy generation queries
+- [x] **Database Schema** ✅ **COMPLETE (JCB-41)**
+  - [x] Add `description` field to `VideoFrame` model
+  - [x] Add `description_source` field
+  - [x] Add `frame_hash` field for caching
+  - [x] Add indexes for cache lookups and lazy generation queries
 
-- [ ] **Description Generation**
-  - [ ] Create `py/utils/video_descriptions.py` with GPT-4o-mini integration
-  - [ ] Implement `generate_frame_description()` with temporal context
-  - [ ] Implement `_build_description_prompt()` with format enforcement
-  - [ ] Add retry logic and error handling
+- [x] **Description Generation** ✅ **COMPLETE (JCB-41)**
+  - [x] Create `py/utils/video_descriptions.py` with GPT-4o-mini integration
+  - [x] Implement `generate_frame_description()` with temporal context
+  - [x] Implement `_build_description_prompt()` with format enforcement
+  - [x] Add retry logic and error handling
 
-- [ ] **Hybrid Strategy**
-  - [ ] Implement perceptual hashing for frame similarity
-  - [ ] Implement cache lookup logic
-  - [ ] Implement "interesting frame" detection
-  - [ ] Implement lazy generation background jobs
+- [x] **Hybrid Strategy** ✅ **COMPLETE (JCB-41)**
+  - [x] Implement perceptual hashing for frame similarity
+  - [x] Implement cache lookup logic
+  - [x] Implement "interesting frame" detection
+  - [x] Implement lazy generation background jobs
 
-- [ ] **Adaptive Intervals**
-  - [ ] Implement `determine_capture_interval()` logic
-  - [ ] Update video capture to use adaptive intervals
+- [x] **Adaptive Intervals** ✅ **COMPLETE (JCB-42)**
+  - [x] Implement `determine_capture_interval()` logic
+  - [x] Update video capture to use adaptive intervals (5-10s)
 
-- [ ] **Summarization Integration**
-  - [ ] Update `summarize_segment()` to pre-generate lazy descriptions
-  - [ ] Ensure all frames have descriptions before summarization
-  - [ ] Include video frame descriptions in summary context
+- [x] **Summarization Integration** ✅ **COMPLETE (JCB-35, JCB-41)**
+  - [x] Update `summarize_segment()` to pre-generate lazy descriptions
+  - [x] Ensure all frames have descriptions before summarization
+  - [x] Include video frame descriptions in summary context
 
-- [ ] **Retrieval Integration**
-  - [ ] Update `retrieve_video_with_context()` to use descriptions
-  - [ ] Implement on-demand generation fallback
-  - [ ] Update prompt templates to include visual descriptions
+- [x] **Retrieval Integration** ✅ **COMPLETE (JCB-33, JCB-41)**
+  - [x] Update `retrieve_video_with_context()` to use descriptions
+  - [x] Implement on-demand generation fallback
+  - [x] Update prompt templates to include visual descriptions
 
 - [ ] **Testing**
   - [ ] Test description generation quality
@@ -1088,11 +1092,12 @@ async def retrieve_video_with_context(
 
 ---
 
-### 2. Chat Message Embeddings
+### 2. Chat Message Embeddings ✅ **COMPLETE (JCB-32)**
 
 **Priority**: High  
 **Effort**: Low  
-**Impact**: High
+**Impact**: High  
+**Status**: ✅ **DONE**
 
 #### Implementation Steps
 
@@ -1512,34 +1517,34 @@ class ContextIsolator:
 
 ## Implementation Checklist
 
-### MVP 1.5 (Immediate)
+### MVP 1.5 (Immediate) ✅ **COMPLETE**
 
-- [ ] **Video Frame Storage**
-  - [ ] Create `video_frames` table schema
-  - [ ] Implement screenshot capture (Node.js)
-  - [ ] Create video embeddings utility (CLIP)
-  - [ ] Implement video store (storage + retrieval)
-  - [ ] Integrate video into retrieval pipeline
+- [x] **Video Frame Storage** ✅ **COMPLETE (JCB-31)**
+  - [x] Create `video_frames` table schema
+  - [x] Implement screenshot capture (Node.js)
+  - [x] Create video embeddings utility (CLIP)
+  - [x] Implement video store (storage + retrieval)
+  - [x] Integrate video into retrieval pipeline
 
-- [ ] **Chat Message Storage**
-  - [ ] Create `chat_messages` table schema
-  - [ ] Store messages with embeddings
-  - [ ] Implement chat store (storage + retrieval)
-  - [ ] Integrate chat into retrieval pipeline
+- [x] **Chat Message Storage** ✅ **COMPLETE (JCB-32)**
+  - [x] Create `chat_messages` table schema
+  - [x] Store messages with embeddings
+  - [x] Implement chat store (storage + retrieval)
+  - [x] Integrate chat into retrieval pipeline
 
-- [ ] **Multi-Source Retrieval**
-  - [ ] Extend retriever to handle multiple sources
-  - [ ] Implement temporal alignment
-  - [ ] Implement multi-modal fusion
-  - [ ] Update RAG service to use multi-source retrieval
+- [x] **Multi-Source Retrieval** ✅ **COMPLETE**
+  - [x] Extend retriever to handle multiple sources
+  - [x] Implement temporal alignment (JCB-33)
+  - [x] Implement multi-modal fusion
+  - [x] Update RAG service to use multi-source retrieval
 
-### Post-MVP (Medium-Term)
+### Post-MVP (Medium-Term) ✅ **COMPLETE**
 
-- [ ] **Memory-Propagated Summarization**
-  - [ ] Implement segment-based processing
-  - [ ] Implement memory propagation
-  - [ ] Implement adaptive memory selection
-  - [ ] Integrate into retrieval pipeline
+- [x] **Memory-Propagated Summarization** ✅ **COMPLETE (JCB-35)**
+  - [x] Implement segment-based processing (2-minute segments)
+  - [x] Implement memory propagation (previous summary included)
+  - [x] Implement adaptive memory selection (semantic + temporal)
+  - [x] Integrate into retrieval pipeline
 
 - [ ] **Streaming KV Cache**
   - [ ] Implement KV cache structure
