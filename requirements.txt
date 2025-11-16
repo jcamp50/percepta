@@ -49,3 +49,7 @@ asyncio==3.4.3
 websockets==13.1  # EventSub WebSocket client
 boto3==1.35.73
 
+# Testing
+respx==0.21.0  # HTTP mocking for httpx
+responses==0.25.0  # HTTP mocking for requests
+

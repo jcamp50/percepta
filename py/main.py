@@ -29,7 +29,7 @@ from fastapi import FastAPI, HTTPException, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 
 from py.config import settings
-from schemas.messages import (
+from py.schemas.messages import (
     ChatMessage,
     MessageReceived,
     SendRequest,
@@ -38,6 +38,8 @@ from schemas.messages import (
     RAGQueryRequest,
     RAGAnswerResponse,
     TranscriptionResponse,
+    TranscriptionSegment,
+    TranscriptionWord,
     AudioStreamUrlResponse,
 )
 from py.reason.rag import RAGService
@@ -1300,7 +1302,6 @@ async def transcribe_audio(
         result = await transcription_service.transcribe_async(audio_content)
 
         # Convert segments to response format using Pydantic models
-        from schemas.messages import TranscriptionSegment, TranscriptionWord
 
         segments = [
             TranscriptionSegment(

@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+. "$(dirname "$0")/_/husky.sh"
+
+echo "[pre-push] Running full unit tests (Py + Node)"
+venv/bin/python -m pytest -q -k "unit and not e2e" || venv\\Scripts\\python -m pytest -q -k "unit and not e2e" || exit 1
+npm test -- --maxWorkers=50% --passWithNoTests || exit 1
+

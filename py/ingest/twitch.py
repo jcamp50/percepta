@@ -17,7 +17,7 @@ import websockets
 from websockets.client import WebSocketClientProtocol
 
 from py.config import settings
-from schemas.events import (
+from py.schemas.events import (
     StreamOnlineEvent,
     StreamOfflineEvent,
     ChannelRaidEvent,

@@ -11,7 +11,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 
-from schemas.events import (
+from py.schemas.events import (
     StreamOnlineEvent,
     StreamOfflineEvent,
     ChannelRaidEvent,

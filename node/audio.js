@@ -38,7 +38,7 @@ class AudioCapture {
     this.channel = config.channel;
     this.pythonServiceUrl = config.pythonServiceUrl || 'http://localhost:8000';
     this.streamManager = config.streamManager; // Required
-    
+
     if (!this.streamManager) {
       throw new Error('StreamManager is required for audio capture');
     }
@@ -51,7 +51,7 @@ class AudioCapture {
     this.ffmpegProcess = null;
     this.currentChunkStartTime = null;
     this.broadcasterId = null; // Will be set when capture starts
-    
+
     // Listen to StreamManager events
     this._setupStreamManagerListeners();
   }
@@ -63,12 +63,12 @@ class AudioCapture {
     // Listen for stream URL availability
     this.streamManager.on('streamUrl', async (data) => {
       const { streamUrl, broadcasterId, channelId } = data;
-      
+
       // Only process if this is for our channel
       if (channelId !== this.channel) {
         return;
       }
-      
+
       // Store broadcaster ID if provided
       if (broadcasterId) {
         this.broadcasterId = broadcasterId;
@@ -82,7 +82,9 @@ class AudioCapture {
           `StreamManager didn't provide broadcaster ID for ${channelId}, attempting lookup...`,
           'audio'
         );
-        this.broadcasterId = await this.streamManager.getBroadcasterId(channelId);
+        this.broadcasterId = await this.streamManager.getBroadcasterId(
+          channelId
+        );
         if (this.broadcasterId) {
           logger.info(
             `Successfully obtained broadcaster ID: ${this.broadcasterId}`,
@@ -95,14 +97,17 @@ class AudioCapture {
           );
         }
       }
-      
+
       // Start capture if not already capturing
       if (!this.isCapturing) {
-        logger.info(`Stream URL available for ${channelId}, starting audio capture`, 'audio');
+        logger.info(
+          `Stream URL available for ${channelId}, starting audio capture`,
+          'audio'
+        );
         await this._startCaptureWithUrl(streamUrl, channelId);
       }
     });
-    
+
     // Listen for stream offline
     this.streamManager.on('streamOffline', (data) => {
       if (data.channelId === this.channel) {
@@ -110,11 +115,14 @@ class AudioCapture {
         this.stopCapture();
       }
     });
-    
+
     // Listen for stream online (will trigger streamUrl event)
     this.streamManager.on('streamOnline', (data) => {
       if (data.channelId === this.channel) {
-        logger.info('Stream came online, will start capture when URL is available', 'audio');
+        logger.info(
+          'Stream came online, will start capture when URL is available',
+          'audio'
+        );
       }
     });
   }
@@ -141,7 +149,6 @@ class AudioCapture {
       });
     });
   }
-
 
   /**
    * Send audio chunk to Python backend
@@ -187,12 +194,18 @@ class AudioCapture {
       );
     } catch (error) {
       // Log detailed error information for debugging
-      if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+      if (
+        error.code === 'ECONNABORTED' ||
+        (error.message && error.message.includes('timeout'))
+      ) {
         logger.error(
           `Timeout sending audio chunk to Python (request took >90s). This may indicate slow transcription processing.`,
           'audio'
         );
-      } else if (error.code === 'ECONNRESET' || error.message.includes('socket hang up')) {
+      } else if (
+        error.code === 'ECONNRESET' ||
+        (error.message && error.message.includes('socket hang up'))
+      ) {
         logger.error(
           `Connection reset while sending audio chunk to Python. Python service may have closed the connection due to timeout or error. Error: ${error.message}`,
           'audio'
@@ -200,13 +213,17 @@ class AudioCapture {
       } else if (error.response) {
         // Server responded with error status
         logger.error(
-          `Python service returned error ${error.response.status}: ${error.response.data?.detail || error.response.statusText}`,
+          `Python service returned error ${error.response.status}: ${
+            error.response.data?.detail || error.response.statusText
+          }`,
           'audio'
         );
       } else {
         // Other network/connection errors
         logger.warn(
-          `Failed to send audio chunk to Python: ${error.message} (code: ${error.code || 'unknown'})`,
+          `Failed to send audio chunk to Python: ${error.message} (code: ${
+            error.code || 'unknown'
+          })`,
           'audio'
         );
       }
@@ -764,7 +781,10 @@ class AudioCapture {
     // Get stream URL from StreamManager
     const streamUrl = await this.streamManager.getStreamUrl(channelId);
     if (!streamUrl) {
-      logger.info(`Stream URL not available yet, will start when stream comes online`, 'audio');
+      logger.info(
+        `Stream URL not available yet, will start when stream comes online`,
+        'audio'
+      );
       // StreamManager will emit streamUrl event when stream becomes available
       return;
     }

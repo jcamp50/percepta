@@ -15,7 +15,7 @@ import httpx
 
 from py.config import settings
 from py.memory.vector_store import VectorStore
-from schemas.metadata import ChannelMetadata, ChannelInfo, StreamInfo
+from py.schemas.metadata import ChannelMetadata, ChannelInfo, StreamInfo
 from py.utils.logging import get_logger
 
 logger = get_logger(__name__, category='stream_metadata')

@@ -1,0 +1,19 @@
+repos:
+  - repo: https://github.com/psf/black
+    rev: 24.8.0
+    hooks:
+      - id: black
+        language_version: python3
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.5
+    hooks:
+      - id: ruff
+      - id: ruff-format
+  - repo: local
+    hooks:
+      - id: pytest-fast
+        name: pytest fast unit
+        entry: bash -c "venv/bin/python -m pytest -q -k 'unit and not slow' || venv\\Scripts\\python -m pytest -q -k 'unit and not slow'"
+        language: system
+        pass_filenames: false
+

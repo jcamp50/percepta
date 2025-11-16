@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+. "$(dirname "$0")/_/husky.sh"
+
+echo "[pre-commit] Lint & quick unit tests"
+npm run lint || exit 1
+npm run test:unit -- --maxWorkers=50% --passWithNoTests || exit 1
+

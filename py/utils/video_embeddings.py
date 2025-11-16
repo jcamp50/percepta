@@ -86,8 +86,8 @@ def project_clip_to_1536(clip_512: List[float]) -> List[float]:
     if norm > 0:
         projected = projected / norm
     else:
-        # Handle edge case where all values are zero
-        projected = projected / np.sqrt(TARGET_EMBEDDING_DIM)
+        # Handle edge case where all values are zero: return a uniform unit vector
+        projected = np.ones(TARGET_EMBEDDING_DIM, dtype=np.float32) / np.sqrt(TARGET_EMBEDDING_DIM)
     
     # Validate output dimension
     if len(projected) != TARGET_EMBEDDING_DIM:

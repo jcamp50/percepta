@@ -1,0 +1,78 @@
+name: CI (unit + integration)
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: ankane/pgvector:latest
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: percepta_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-asyncio
+      
+      - name: Run pytest (unit + selected integration)
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5433/percepta_test
+          TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5433/percepta_test
+          OPENAI_API_KEY: test-key-for-ci
+        run: |
+          pytest -q -m "not e2e"
+      
+      - name: Upload coverage
+        if: always()
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage.xml
+          flags: python
+          fail_ci_if_error: false
+
+  node:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Install Node deps
+        run: npm ci
+      
+      - name: Run Jest (unit + selected integration)
+        run: npm test -- --passWithNoTests
+      
+      - name: Upload coverage
+        if: always()
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage/lcov.info
+          flags: node
+          fail_ci_if_error: false
+
