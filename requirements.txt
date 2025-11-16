@@ -36,8 +36,16 @@ pydantic-settings==2.7.1
 # Environment & Config
 python-dotenv==1.0.0
 
+# Video Embeddings (CLIP)
+transformers>=4.30.0
+torch>=2.0.0
+torchvision>=0.15.0
+Pillow>=10.0.0
+numpy>=1.24.0
+
 # Utilities
 httpx==0.26.0
 asyncio==3.4.3
 websockets==13.1  # EventSub WebSocket client
+boto3==1.35.73
 

@@ -225,7 +225,7 @@ class AudioStreamUrlResponse(BaseModel):
     """
     
     channel_id: str = Field(..., description="Twitch channel identifier")
-    stream_url: str = Field(..., description="Authenticated HLS URL for audio-only stream")
+    stream_url: Optional[str] = Field(None, description="Authenticated HLS URL for audio-only stream (None if unavailable)")
     quality: str = Field(default="audio_only", description="Stream quality (always 'audio_only' for our use case)")
     available: bool = Field(..., description="Whether stream is currently available/live")
 

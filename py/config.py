@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     openai_api_key: Optional[str] = None
     twitch_bot_name: Optional[str] = None
+    aws_profile: Optional[str] = None
+    aws_region: Optional[str] = None
     rag_top_k: int = 5
     rag_prefilter_limit: int = 40
     rag_half_life_minutes: int = 60
@@ -90,6 +92,18 @@ class Settings(BaseSettings):
     repeated_question_cooldown: int = 60  # Cooldown in seconds for repeated questions
     max_response_length: int = 500  # Max response length in chars
     long_answer_storage_hours: int = 24  # TTL for stored long answers in hours
+
+    # Video capture & description tuning
+    video_capture_baseline_interval: int = 10  # seconds
+    video_capture_active_interval: int = 5  # seconds when activity spikes
+    video_capture_chat_threshold: int = 25  # messages per 30s to trigger active interval
+    video_capture_interesting_chat_threshold: int = 10  # messages per 5s window for instant description
+    video_capture_keyword_list: Optional[str] = None  # comma separated keywords
+    video_frame_hash_window_seconds: int = 60  # window when searching for similar frames
+    video_frame_hash_max_distance: int = 8  # hamming distance threshold for hash reuse
+    video_frame_bucket: Optional[str] = None
+    video_frame_prefix: Optional[str] = None
+    video_frame_url_ttl_seconds: int = 600  # seconds
 
     class Config:
         """

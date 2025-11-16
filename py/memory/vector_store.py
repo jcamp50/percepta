@@ -332,3 +332,106 @@ class VectorStore:
                 }
             )
         return output
+
+    async def get_transcript_by_id(self, transcript_id: str) -> Optional[Dict[str, Any]]:
+        """Get a transcript by its ID.
+        
+        Args:
+            transcript_id: Transcript UUID as string
+            
+        Returns:
+            Transcript dict with id, channel_id, text, started_at, ended_at, or None if not found
+        """
+        sql = """
+        SELECT id, channel_id, started_at, ended_at, text
+        FROM transcripts
+        WHERE id = :transcript_id
+        """
+        
+        async with self.session_factory() as session:
+            result = await session.execute(
+                text(sql), {"transcript_id": transcript_id}
+            )
+            row = result.mappings().first()
+            
+            if row:
+                return {
+                    "id": str(row["id"]),
+                    "channel_id": row["channel_id"],
+                    "started_at": row["started_at"],
+                    "ended_at": row["ended_at"],
+                    "text": row["text"],
+                }
+            return None
+
+    async def get_recent_transcript_text(
+        self,
+        channel_id: str,
+        window_seconds: int = 30,
+    ) -> Optional[str]:
+        """Return the most recent transcript text within a time window."""
+        sql = """
+        SELECT text
+        FROM transcripts
+        WHERE channel_id = :channel_id
+          AND ended_at >= (NOW() - (:window_seconds * INTERVAL '1 second'))
+        ORDER BY ended_at DESC
+        LIMIT 1
+        """
+
+        async with self.session_factory() as session:
+            result = await session.execute(
+                text(sql),
+                {"channel_id": channel_id, "window_seconds": window_seconds},
+            )
+            row = result.mappings().first()
+            if row:
+                return row["text"]
+            return None
+
+    async def get_range(
+        self,
+        channel_id: str,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> List[Dict[str, Any]]:
+        """Return transcripts within a time range.
+
+        Args:
+            channel_id: Broadcaster channel ID
+            start_time: Start of time range (inclusive)
+            end_time: End of time range (inclusive)
+
+        Returns:
+            List of transcript dicts with id, text, started_at, ended_at
+        """
+        sql = """
+        SELECT id, channel_id, text, started_at, ended_at
+        FROM transcripts
+        WHERE channel_id = :channel_id
+          AND started_at < :end_time
+          AND ended_at > :start_time
+        ORDER BY started_at ASC
+        """
+
+        async with self.session_factory() as session:
+            result = await session.execute(
+                text(sql),
+                {
+                    "channel_id": channel_id,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                },
+            )
+            rows = result.mappings().all()
+
+        return [
+            {
+                "id": str(row["id"]),
+                "channel_id": row["channel_id"],
+                "text": row["text"],
+                "started_at": row["started_at"],
+                "ended_at": row["ended_at"],
+            }
+            for row in rows
+        ]

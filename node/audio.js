@@ -29,8 +29,7 @@ class AudioCapture {
      * config should contain:
      * - channel: string (Twitch channel name)
      * - pythonServiceUrl: string (Python backend URL)
-     * - twitchClientId: string (Twitch API client ID)
-     * - twitchOAuthToken: string (Twitch OAuth token for API calls)
+     * - streamManager: StreamManager instance (required)
      * - chunkSeconds: number (default: 15)
      * - sampleRate: number (default: 16000)
      * - channels: number (default: 1 for mono)
@@ -38,17 +37,86 @@ class AudioCapture {
     this.config = config;
     this.channel = config.channel;
     this.pythonServiceUrl = config.pythonServiceUrl || 'http://localhost:8000';
-    this.twitchClientId = config.twitchClientId;
-    this.twitchOAuthToken = config.twitchOAuthToken;
+    this.streamManager = config.streamManager; // Required
+    
+    if (!this.streamManager) {
+      throw new Error('StreamManager is required for audio capture');
+    }
+
     this.chunkSeconds = config.chunkSeconds || 15;
     this.sampleRate = config.sampleRate || 16000;
     this.audioChannels = config.channels || 1;
 
     this.isCapturing = false;
     this.ffmpegProcess = null;
-    this.streamMonitorInterval = null;
     this.currentChunkStartTime = null;
     this.broadcasterId = null; // Will be set when capture starts
+    
+    // Listen to StreamManager events
+    this._setupStreamManagerListeners();
+  }
+
+  /**
+   * Setup listeners for StreamManager events
+   */
+  _setupStreamManagerListeners() {
+    // Listen for stream URL availability
+    this.streamManager.on('streamUrl', async (data) => {
+      const { streamUrl, broadcasterId, channelId } = data;
+      
+      // Only process if this is for our channel
+      if (channelId !== this.channel) {
+        return;
+      }
+      
+      // Store broadcaster ID if provided
+      if (broadcasterId) {
+        this.broadcasterId = broadcasterId;
+        logger.info(
+          `Resolved channel ${channelId} to broadcaster ID: ${broadcasterId}`,
+          'audio'
+        );
+      } else {
+        // Try to get broadcaster ID ourselves if StreamManager didn't provide it
+        logger.warn(
+          `StreamManager didn't provide broadcaster ID for ${channelId}, attempting lookup...`,
+          'audio'
+        );
+        this.broadcasterId = await this.streamManager.getBroadcasterId(channelId);
+        if (this.broadcasterId) {
+          logger.info(
+            `Successfully obtained broadcaster ID: ${this.broadcasterId}`,
+            'audio'
+          );
+        } else {
+          logger.error(
+            `Failed to get broadcaster ID for ${channelId}. Audio chunks will be stored with channel name.`,
+            'audio'
+          );
+        }
+      }
+      
+      // Start capture if not already capturing
+      if (!this.isCapturing) {
+        logger.info(`Stream URL available for ${channelId}, starting audio capture`, 'audio');
+        await this._startCaptureWithUrl(streamUrl, channelId);
+      }
+    });
+    
+    // Listen for stream offline
+    this.streamManager.on('streamOffline', (data) => {
+      if (data.channelId === this.channel) {
+        logger.info('Stream went offline, stopping audio capture', 'audio');
+        this.stopCapture();
+      }
+    });
+    
+    // Listen for stream online (will trigger streamUrl event)
+    this.streamManager.on('streamOnline', (data) => {
+      if (data.channelId === this.channel) {
+        logger.info('Stream came online, will start capture when URL is available', 'audio');
+      }
+    });
   }
 
   /**
@@ -56,10 +124,6 @@ class AudioCapture {
    * Validates configuration and checks ffmpeg availability
    */
   initialize() {
-    if (!this.twitchClientId) {
-      throw new Error('TWITCH_CLIENT_ID is required for audio capture');
-    }
-
     // Check if ffmpeg is available
     return new Promise((resolve, reject) => {
       ffmpeg.getAvailableEncoders((err, encoders) => {
@@ -78,159 +142,6 @@ class AudioCapture {
     });
   }
 
-  /**
-   * Check if Twitch channel is currently live
-   * @param {string} channelId - Channel name (without #)
-   * @returns {Promise<boolean>} True if stream is live
-   */
-  async _checkStreamStatus(channelId) {
-    try {
-      // Extract token (remove 'oauth:' prefix if present, Twitch API expects just the token)
-      const token = this.twitchOAuthToken?.replace(/^oauth:/, '') || '';
-
-      if (!token) {
-        logger.warn('No OAuth token provided for Twitch API calls', 'audio');
-        return false;
-      }
-
-      const response = await axios.get(
-        `https://api.twitch.tv/helix/streams?user_login=${channelId}`,
-        {
-          headers: {
-            'Client-ID': this.twitchClientId,
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
-
-      const streams = response.data.data || [];
-      return streams.length > 0;
-    } catch (error) {
-      if (error.response?.status === 404) {
-        return false; // Channel doesn't exist
-      }
-      if (error.response?.status === 401) {
-        logger.error(
-          'Twitch API authentication failed. Check TWITCH_BOT_TOKEN and TWITCH_CLIENT_ID.',
-          'audio'
-        );
-        return false;
-      }
-      logger.warn(`Failed to check stream status: ${error.message}`, 'audio');
-      return false;
-    }
-  }
-
-  /**
-   * Get authenticated audio-only HLS stream URL via Python/Streamlink service
-   *
-   * Uses Streamlink Python API to get authenticated Twitch audio-only stream URLs.
-   * Streamlink handles all Twitch authentication (OAuth, client-integrity tokens) internally.
-   *
-   * @param {string} channelId - Channel name (without #)
-   * @returns {Promise<string|null>} HLS URL or null if not available
-   */
-  async _getHlsUrl(channelId) {
-    // First check if stream is live (still useful for early detection)
-    const isLive = await this._checkStreamStatus(channelId);
-    if (!isLive) {
-      logger.info(`Channel ${channelId} is not currently live`, 'audio');
-      return null;
-    }
-
-    try {
-      // Call Python service endpoint that uses Streamlink to get authenticated URL
-      const response = await axios.get(
-        `${this.pythonServiceUrl}/api/get-audio-stream-url`,
-        {
-          params: {
-            channel_id: channelId,
-          },
-          timeout: 10000, // 10 second timeout
-        }
-      );
-
-      const { stream_url, available } = response.data;
-
-      if (!available || !stream_url) {
-        logger.warn(
-          `Audio-only stream not available for channel ${channelId} via Streamlink`,
-          'audio'
-        );
-        return null;
-      }
-
-      logger.info(
-        `Retrieved authenticated audio-only stream URL for channel ${channelId} via Streamlink`,
-        'audio'
-      );
-      return stream_url;
-    } catch (error) {
-      logger.error(
-        `Failed to get HLS URL via Streamlink: ${error.message}`,
-        'audio'
-      );
-
-      if (error.response) {
-        // HTTP error response
-        if (error.response.status === 503) {
-          logger.error(
-            'Python Streamlink service unavailable. Ensure streamlink is installed: pip install streamlink',
-            'audio'
-          );
-        } else if (error.response.status === 502) {
-          logger.error(
-            `Streamlink plugin error for channel ${channelId}. Channel may be offline or restricted.`,
-            'audio'
-          );
-        } else if (error.response.status === 500) {
-          logger.error(
-            'Python service error getting stream URL. Check Python service logs.',
-            'audio'
-          );
-        }
-      } else if (error.code === 'ECONNREFUSED') {
-        logger.error(
-          `Cannot connect to Python service at ${this.pythonServiceUrl}. Is it running?`,
-          'audio'
-        );
-      } else if (error.code === 'ETIMEDOUT') {
-        logger.error(
-          'Timeout waiting for Python service response. Streamlink may be taking too long.',
-          'audio'
-        );
-      }
-
-      return null;
-    }
-  }
-
-  /**
-   * Start monitoring stream status and auto-start capture when live
-   * @param {string} channelId - Channel name to monitor
-   */
-  _monitorStream(channelId) {
-    logger.info(`Starting stream monitor for ${channelId}`, 'audio');
-
-    // Check every 30 seconds if stream is live
-    this.streamMonitorInterval = setInterval(async () => {
-      if (this.isCapturing) {
-        // Already capturing, just verify still live
-        const isLive = await this._checkStreamStatus(channelId);
-        if (!isLive) {
-          logger.info('Stream went offline, stopping capture', 'audio');
-          await this.stopCapture();
-        }
-      } else {
-        // Not capturing, check if stream went live
-        const isLive = await this._checkStreamStatus(channelId);
-        if (isLive) {
-          logger.info('Stream is now live, starting capture', 'audio');
-          await this.startCapture(channelId);
-        }
-      }
-    }, 30000); // Check every 30 seconds
-  }
 
   /**
    * Send audio chunk to Python backend
@@ -255,6 +166,8 @@ class AudioCapture {
     form.append('ended_at', metadata.ended_at);
 
     try {
+      // Set generous timeout for transcription: 15s audio + 30s transcription + 5s embedding + 5s buffer = 55s
+      // Round up to 90 seconds to be safe for slower processing
       const response = await axios.post(
         `${this.pythonServiceUrl}/transcribe`,
         form,
@@ -262,6 +175,10 @@ class AudioCapture {
           headers: form.getHeaders(),
           maxContentLength: Infinity,
           maxBodyLength: Infinity,
+          timeout: 90000, // 90 seconds timeout for transcription processing
+          // Keep connection alive for long-running requests
+          httpAgent: new (require('http').Agent)({ keepAlive: true }),
+          httpsAgent: new (require('https').Agent)({ keepAlive: true }),
         }
       );
       logger.info(
@@ -269,11 +186,30 @@ class AudioCapture {
         'audio'
       );
     } catch (error) {
-      // Log but don't crash - Python service might be down
-      logger.warn(
-        `Failed to send audio chunk to Python: ${error.message}`,
-        'audio'
-      );
+      // Log detailed error information for debugging
+      if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+        logger.error(
+          `Timeout sending audio chunk to Python (request took >90s). This may indicate slow transcription processing.`,
+          'audio'
+        );
+      } else if (error.code === 'ECONNRESET' || error.message.includes('socket hang up')) {
+        logger.error(
+          `Connection reset while sending audio chunk to Python. Python service may have closed the connection due to timeout or error. Error: ${error.message}`,
+          'audio'
+        );
+      } else if (error.response) {
+        // Server responded with error status
+        logger.error(
+          `Python service returned error ${error.response.status}: ${error.response.data?.detail || error.response.statusText}`,
+          'audio'
+        );
+      } else {
+        // Other network/connection errors
+        logger.warn(
+          `Failed to send audio chunk to Python: ${error.message} (code: ${error.code || 'unknown'})`,
+          'audio'
+        );
+      }
     }
   }
 
@@ -802,82 +738,6 @@ class AudioCapture {
   }
 
   /**
-   * Get broadcaster ID from channel name
-   * Retries with exponential backoff to handle Python service startup race condition
-   * @param {string} channelName - Channel name (without #)
-   * @param {number} maxRetries - Maximum number of retry attempts (default: 5)
-   * @returns {Promise<string|null>} Broadcaster ID or null if not found
-   */
-  async _getBroadcasterId(channelName, maxRetries = 5) {
-    const baseDelay = 1000; // Start with 1 second delay
-    const maxDelay = 10000; // Cap at 10 seconds
-
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      try {
-        const response = await axios.get(
-          `${this.pythonServiceUrl}/api/get-broadcaster-id`,
-          {
-            params: {
-              channel_name: channelName,
-            },
-            timeout: 5000,
-          }
-        );
-        if (attempt > 0) {
-          logger.info(
-            `Successfully got broadcaster ID for ${channelName} after ${attempt} retry(ies)`,
-            'audio'
-          );
-        }
-        return response.data.broadcaster_id || null;
-      } catch (error) {
-        // Check if this is a connection error (service not ready) vs API error (channel not found)
-        const isConnectionError =
-          error.code === 'ECONNREFUSED' ||
-          error.code === 'ETIMEDOUT' ||
-          error.message.includes('Network Error') ||
-          (error.response && error.response.status >= 500);
-
-        // If it's not a connection error, don't retry (e.g., 404 = channel not found)
-        if (!isConnectionError) {
-          logger.error(
-            `Failed to get broadcaster ID for ${channelName}: ${error.message}`,
-            'audio'
-          );
-          return null;
-        }
-
-        // If we've exhausted retries, give up
-        if (attempt >= maxRetries) {
-          logger.error(
-            `Failed to get broadcaster ID for ${channelName} after ${maxRetries} retries: ${error.message}`,
-            'audio'
-          );
-          return null;
-        }
-
-        // Calculate exponential backoff delay with jitter
-        const delay = Math.min(
-          baseDelay * Math.pow(2, attempt) + Math.random() * 1000,
-          maxDelay
-        );
-
-        logger.warn(
-          `Python service not ready yet, retrying broadcaster ID lookup for ${channelName} in ${Math.round(
-            delay
-          )}ms (attempt ${attempt + 1}/${maxRetries})...`,
-          'audio'
-        );
-
-        // Wait before retrying
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-    }
-
-    return null;
-  }
-
-  /**
    * Start capturing audio from Twitch stream
    * @param {string} channelId - Channel name (without #)
    */
@@ -887,25 +747,46 @@ class AudioCapture {
       return;
     }
 
-    // Get broadcaster ID for this channel
-    this.broadcasterId = await this._getBroadcasterId(channelId);
+    // Get broadcaster ID from StreamManager
+    this.broadcasterId = await this.streamManager.getBroadcasterId(channelId);
     if (!this.broadcasterId) {
-      const errMsg = `Failed to get broadcaster ID for ${channelId}, cannot start capture`;
-      logger.error(errMsg, 'audio');
-      throw new Error(errMsg);
+      logger.warn(
+        `Failed to get broadcaster ID for ${channelId}, will try again when stream URL is available`,
+        'audio'
+      );
+    } else {
+      logger.info(
+        `Resolved channel ${channelId} to broadcaster ID: ${this.broadcasterId}`,
+        'audio'
+      );
     }
-    logger.info(
-      `Resolved channel ${channelId} to broadcaster ID: ${this.broadcasterId}`,
-      'audio'
-    );
 
-    // Get HLS URL
-    const hlsUrl = await this._getHlsUrl(channelId);
-    if (!hlsUrl) {
-      logger.info(`Cannot start capture: stream is not live`, 'audio');
-      // Start monitoring to auto-start when live
-      this._monitorStream(channelId);
+    // Get stream URL from StreamManager
+    const streamUrl = await this.streamManager.getStreamUrl(channelId);
+    if (!streamUrl) {
+      logger.info(`Stream URL not available yet, will start when stream comes online`, 'audio');
+      // StreamManager will emit streamUrl event when stream becomes available
       return;
+    }
+
+    // Start capture with the stream URL
+    await this._startCaptureWithUrl(streamUrl, channelId);
+  }
+
+  /**
+   * Internal method to start capture with a specific stream URL
+   * @param {string} streamUrl - Video stream URL (full video, will extract audio)
+   * @param {string} channelId - Channel name
+   */
+  async _startCaptureWithUrl(streamUrl, channelId) {
+    if (this.isCapturing) {
+      logger.warn(`Audio capture already running`, 'audio');
+      return;
+    }
+
+    // Get broadcaster ID if not already set
+    if (!this.broadcasterId) {
+      this.broadcasterId = await this.streamManager.getBroadcasterId(channelId);
     }
 
     this.isCapturing = true;
@@ -913,7 +794,8 @@ class AudioCapture {
     logger.info(`Starting audio capture for ${channelId}`, 'audio');
 
     try {
-      await this._chunkAudio(hlsUrl, channelId);
+      // Use full video stream URL and extract audio with -vn flag
+      await this._chunkAudio(streamUrl, channelId);
     } catch (error) {
       logger.error(`Audio capture failed: ${error.message}`, 'audio');
       this.isCapturing = false;
@@ -930,12 +812,6 @@ class AudioCapture {
     }
 
     logger.info('Stopping audio capture...', 'audio');
-
-    // Stop stream monitoring
-    if (this.streamMonitorInterval) {
-      clearInterval(this.streamMonitorInterval);
-      this.streamMonitorInterval = null;
-    }
 
     // Stop chunk polling
     if (this.chunkPollInterval) {

@@ -16,10 +16,14 @@ require('dotenv').config(); // Load .env file
 const axios = require('axios');
 const ChatClient = require('./chat');
 const AudioCapture = require('./audio');
+const VideoCapture = require('./video');
+const StreamManager = require('./stream');
 const logger = require('./utils/logger');
 
 let chatClient = null;
 let audioCapture = null;
+let videoCapture = null;
+let streamManager = null;
 
 /**
  * Validate required environment variables
@@ -98,24 +102,80 @@ async function main() {
     await chatClient.connect();
     logger.success('Percepta bot is now online!', 'system');
 
-    // Initialize audio capture
-    audioCapture = new AudioCapture({
-      channel: process.env.TARGET_CHANNEL,
-      pythonServiceUrl: process.env.PYTHON_SERVICE_URL,
-      twitchClientId: process.env.TWITCH_CLIENT_ID,
-      twitchOAuthToken: process.env.TWITCH_BOT_TOKEN,
-      chunkSeconds: parseInt(process.env.AUDIO_CHUNK_SECONDS || '15', 10),
-      sampleRate: parseInt(process.env.AUDIO_SAMPLE_RATE || '16000', 10),
-      channels: parseInt(process.env.AUDIO_CHANNELS || '1', 10),
-    });
-
+    // Initialize stream manager (shared between audio and video)
     try {
-      await audioCapture.initialize();
-      // Start capturing audio if stream is live
-      await audioCapture.startCapture(process.env.TARGET_CHANNEL);
+      streamManager = new StreamManager({
+        pythonServiceUrl: process.env.PYTHON_SERVICE_URL,
+        twitchClientId: process.env.TWITCH_CLIENT_ID,
+        twitchOAuthToken: process.env.TWITCH_BOT_TOKEN,
+      });
+
+      await streamManager.initialize();
+      logger.info('Stream manager initialized', 'system');
     } catch (error) {
-      logger.warn(`Audio capture initialization failed: ${error.message}`, 'system');
-      logger.info('Continuing without audio capture (chat bot still functional)', 'system');
+      logger.warn(`Stream manager initialization failed: ${error.message}`, 'system');
+      logger.info('Continuing without stream manager (audio/video capture unavailable)', 'system');
+    }
+
+    // Initialize audio capture with stream manager
+    if (streamManager) {
+      try {
+        audioCapture = new AudioCapture({
+          channel: process.env.TARGET_CHANNEL,
+          pythonServiceUrl: process.env.PYTHON_SERVICE_URL,
+          streamManager: streamManager,
+          chunkSeconds: parseInt(process.env.AUDIO_CHUNK_SECONDS || '15', 10),
+          sampleRate: parseInt(process.env.AUDIO_SAMPLE_RATE || '16000', 10),
+          channels: parseInt(process.env.AUDIO_CHANNELS || '1', 10),
+        });
+
+        await audioCapture.initialize();
+        logger.info('Audio capture initialized', 'system');
+      } catch (error) {
+        logger.warn(`Audio capture initialization failed: ${error.message}`, 'system');
+        logger.info('Continuing without audio capture (chat bot still functional)', 'system');
+      }
+
+      // Initialize video capture with stream manager
+      try {
+        const baselineInterval = parseInt(process.env.VIDEO_CAPTURE_BASELINE_INTERVAL || '10', 10);
+        const activeInterval = parseInt(process.env.VIDEO_CAPTURE_ACTIVE_INTERVAL || '5', 10);
+        const initialInterval = parseInt(
+          process.env.VIDEO_FRAME_INTERVAL || String(baselineInterval),
+          10
+        );
+
+        videoCapture = new VideoCapture({
+          channel: process.env.TARGET_CHANNEL,
+          pythonServiceUrl: process.env.PYTHON_SERVICE_URL,
+          streamManager: streamManager,
+          baselineInterval,
+          activeInterval,
+          frameInterval: initialInterval,
+        });
+
+        await videoCapture.initialize();
+        logger.info('Video capture initialized', 'system');
+      } catch (error) {
+        logger.warn(`Video capture initialization failed: ${error.message}`, 'system');
+        logger.info('Continuing without video capture (chat bot still functional)', 'system');
+      }
+
+      // Start stream monitoring (will notify audio/video when stream is available)
+      if (streamManager) {
+        try {
+          streamManager.startMonitoring(process.env.TARGET_CHANNEL);
+          // Start audio and video capture (they will get stream URL from StreamManager events)
+          if (audioCapture) {
+            await audioCapture.startCapture(process.env.TARGET_CHANNEL);
+          }
+          if (videoCapture) {
+            await videoCapture.startCapture(process.env.TARGET_CHANNEL);
+          }
+        } catch (error) {
+          logger.warn(`Failed to start stream monitoring: ${error.message}`, 'system');
+        }
+      }
     }
   } catch (error) {
     logger.error(`Failed to start: ${error.message}`, 'system');
@@ -142,12 +202,30 @@ async function main() {
 async function shutdown() {
   logger.info('Shutting down Percepta Node Service...', 'system');
 
+  // Stop video capture if running
+  if (videoCapture) {
+    try {
+      await videoCapture.stopCapture();
+    } catch (error) {
+      logger.warn(`Error stopping video capture: ${error.message}`, 'system');
+    }
+  }
+
   // Stop audio capture if running
   if (audioCapture) {
     try {
       await audioCapture.stopCapture();
     } catch (error) {
       logger.warn(`Error stopping audio capture: ${error.message}`, 'system');
+    }
+  }
+
+  // Stop stream monitoring
+  if (streamManager) {
+    try {
+      streamManager.stopMonitoring();
+    } catch (error) {
+      logger.warn(`Error stopping stream manager: ${error.message}`, 'system');
     }
   }
 
@@ -170,6 +248,25 @@ async function shutdown() {
 // - process.on('SIGTERM', ...) - Kill signal
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
+
+// Handle unhandled promise rejections to prevent silent failures
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error(`Unhandled Promise Rejection: ${reason}`, 'system');
+  if (reason instanceof Error) {
+    logger.error(`Stack: ${reason.stack}`, 'system');
+  }
+  // Don't exit - log and continue, but this helps debug issues
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  logger.error(`Uncaught Exception: ${error.message}`, 'system');
+  logger.error(`Stack: ${error.stack}`, 'system');
+  // Exit on uncaught exceptions as they indicate serious problems
+  shutdown().then(() => {
+    process.exit(1);
+  });
+});
 
 // Start the application
 main();

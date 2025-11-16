@@ -5,6 +5,18 @@
  * - Consistent formatting across the application
  * - Easy to add features later (file logging, log levels)
  * - Single place to modify logging behavior
+ *
+ * Available log categories:
+ * - 'audio': Audio capture and processing
+ * - 'video': Video frame capture and processing
+ * - 'video_description': Visual description generation pipeline
+ * - 'stream': Stream management and monitoring
+ * - 'chat': Chat message handling
+ * - 'system': System-level logs (default)
+ *
+ * Filter logs by category using LOG_CATEGORIES environment variable:
+ *   LOG_CATEGORIES=audio,video
+ *   LOG_CATEGORIES=stream
  */
 
 require('dotenv').config(); // Load .env file for environment variables
@@ -39,7 +51,7 @@ const allowedCategories = process.env.LOG_CATEGORIES
 /**
  * Check if a log should be displayed based on level and category
  * @param {number} level - Log level (from LOG_LEVELS)
- * @param {string|null} category - Category name (or null for system/unclassified)
+ * @param {string|null} category - Category name (e.g., 'audio', 'video', 'stream', 'chat', or null for system/unclassified)
  * @returns {boolean} True if log should be displayed
  */
 function shouldLog(level, category = null) {
@@ -74,7 +86,7 @@ function getTimestamp() {
 /**
  * Log a debug message
  * @param {string} message - Message to log
- * @param {string|null} category - Optional category for filtering (e.g., 'audio', 'chat', 'system')
+ * @param {string|null} category - Optional category for filtering (e.g., 'audio', 'video', 'stream', 'chat', 'system')
  */
 function debug(message, category = null) {
   if (!shouldLog(LOG_LEVELS.DEBUG, category)) {
@@ -86,19 +98,24 @@ function debug(message, category = null) {
 /**
  * Log an info message
  * @param {string} message - Message to log
- * @param {string|null} category - Optional category for filtering (e.g., 'audio', 'chat', 'system')
+ * @param {string|null} category - Optional category for filtering (e.g., 'audio', 'video', 'stream', 'chat', 'system')
  */
 function info(message, category = null) {
   if (!shouldLog(LOG_LEVELS.INFO, category)) {
     return;
   }
-  console.log(`${colors.dim}[${getTimestamp()}] INFO: ${message}${colors.reset}`);
+  const logMessage = `${colors.dim}[${getTimestamp()}] INFO: ${message}${colors.reset}`;
+  console.log(logMessage);
+  // Force flush on Windows to ensure logs appear immediately
+  if (process.platform === 'win32' && process.stdout.isTTY) {
+    process.stdout.write('', () => {}); // Force flush
+  }
 }
 
 /**
  * Log a success message
  * @param {string} message - Success message
- * @param {string|null} category - Optional category for filtering (e.g., 'audio', 'chat', 'system')
+ * @param {string|null} category - Optional category for filtering (e.g., 'audio', 'video', 'stream', 'chat', 'system')
  */
 function success(message, category = null) {
   if (!shouldLog(LOG_LEVELS.INFO, category)) {
@@ -110,25 +127,35 @@ function success(message, category = null) {
 /**
  * Log an error message
  * @param {string} message - Error message
- * @param {string|null} category - Optional category for filtering (e.g., 'audio', 'chat', 'system')
+ * @param {string|null} category - Optional category for filtering (e.g., 'audio', 'video', 'stream', 'chat', 'system')
  */
 function error(message, category = null) {
   if (!shouldLog(LOG_LEVELS.ERROR, category)) {
     return;
   }
-  console.log(`${colors.red}[${getTimestamp()}] ✗ ERROR: ${message}${colors.reset}`);
+  const logMessage = `${colors.red}[${getTimestamp()}] ✗ ERROR: ${message}${colors.reset}`;
+  console.error(logMessage);
+  // Force flush on Windows to ensure logs appear immediately
+  if (process.platform === 'win32' && process.stderr.isTTY) {
+    process.stderr.write('', () => {}); // Force flush
+  }
 }
 
 /**
  * Log a warning message
  * @param {string} message - Warning message
- * @param {string|null} category - Optional category for filtering (e.g., 'audio', 'chat', 'system')
+ * @param {string|null} category - Optional category for filtering (e.g., 'audio', 'video', 'stream', 'chat', 'system')
  */
 function warn(message, category = null) {
   if (!shouldLog(LOG_LEVELS.WARN, category)) {
     return;
   }
-  console.log(`${colors.yellow}[${getTimestamp()}] ⚠ WARN: ${message}${colors.reset}`);
+  const logMessage = `${colors.yellow}[${getTimestamp()}] ⚠ WARN: ${message}${colors.reset}`;
+  console.log(logMessage);
+  // Force flush on Windows to ensure logs appear immediately
+  if (process.platform === 'win32' && process.stdout.isTTY) {
+    process.stdout.write('', () => {}); // Force flush
+  }
 }
 
 /**

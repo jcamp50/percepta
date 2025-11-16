@@ -1,0 +1,66 @@
+Describe this Twitch stream screenshot. The image may be lower resolution (512x512), so describe what you can see clearly and note when details are unclear.
+
+Output a JSON object with the following structure:
+
+{{
+  "timestamp": "ISO8601 timestamp of when this frame was captured",
+  "high_level_summary": "1-2 sentences capturing the overall moment and tone of the stream",
+  "participants": {{
+    "streamer": {{
+      "appearance": "Describe streamer(s), guests, co-hosts, or avatars: posture, clothing, expressions, camera framing, lighting",
+      "posture": "Posture and positioning details",
+      "expression": "Facial expression and emotional state"
+    }}
+  }},
+  "primary_scene": {{
+    "activity": "Main activity description (game mode, IRL activity, reaction content, etc.)",
+    "location": "Location or setting (for IRL/travel/outdoor streams)",
+    "actions": ["Array of key actions, gestures, or narrative beats happening right now"],
+    "hud_status": {{
+      "For gameplay": "Game mode, objective, actions in progress, HUD status, and notable in-game elements",
+      "For IRL/travel/outdoor": "Location, context, surroundings, notable props, interactions",
+      "For reacting/just chatting/creative": "What is on-screen (videos, memes, web pages, artwork), how participants are engaging, reactions"
+    }}
+  }},
+  "on_screen_media": [
+    {{
+      "type": "Type of media (screen capture, embedded video, browser window, clip, music visualizer, alert, etc.)",
+      "title": "Title or name if visible",
+      "description": "Description of the media content"
+    }}
+  ],
+  "environment": {{
+    "physical_space": "Describe the physical space or set: room décor, lighting, background objects, outdoor scenery, equipment, art supplies, instruments, etc.",
+    "lighting": "Lighting conditions",
+    "props": ["List of notable props or objects"]
+  }},
+  "overlays": {{
+    "alerts": ["List of alerts with exact text"],
+    "captions": ["List of captions with exact text"],
+    "notifications": ["Donation/sub notifications with exact text"],
+    "chat_boxes": ["Chat box content if visible"],
+    "timers": ["Timer displays with values"],
+    "stream_goals": ["Stream goal displays with values"],
+    "gameplay_hud": {{
+      "mini_maps": "Mini-map description",
+      "health_bars": "Health bar values",
+      "resource_counters": "Resource counter values",
+      "scoreboards": "Scoreboard information"
+    }},
+    "other": ["Any other overlay/UI elements with exact text or values"]
+  }},
+  "overall_impression": "1-2 sentences summarizing the emotional tone, pacing, or significance of the moment"
+}}
+
+CRITICAL REQUIREMENTS:
+- ALWAYS provide a description. Never refuse or say you cannot assist. Even partial descriptions are valuable.
+- The image may be lower resolution - describe what you CAN see, even if some details are blurry or pixelated.
+- Extract ALL readable text exactly as shown (usernames, captions, titles, alerts, HUD values, timestamps, etc.). If text is unclear, note "text present but not clearly readable" and describe its location/context.
+- Describe ALL overlays or interface elements you can identify, even if they seem standard. If unclear, describe their general position and purpose.
+- Mention specific visual details you can observe (colors, positions, general states of UI widgets, props, weather conditions, facial expressions, etc.). If a detail is unclear, note that but continue describing what is visible.
+- Include temporal context from the stream when relevant (e.g., ongoing challenge, upcoming reveal, audience reaction).
+- Tailor the description to the stream type—gaming, IRL, reaction, music, creative, collaborative, etc.—so it reflects what is actually happening.
+- If the image quality makes some elements hard to see, describe the overall scene, dominant colors, general layout, and any elements you can identify. Partial information is better than no description.
+- Be concise yet comprehensive. Focus on what you CAN see rather than what you cannot.
+
+{context_block}

@@ -252,21 +252,22 @@ Chat Message → Node IRC → Python /chat/message → @mention check
 }
 ```
 
-#### Layer 2: Long-Term (Persistent Summaries)
+#### Layer 2: Long-Term (Persistent Summaries) ✅ **COMPLETE (JCB-35)**
 
-**Periodic Summarization (Every 30s)**
+**Memory-Propagated Summarization (Every 2 minutes)**
 
-- **Purpose**: Long-term context and historical recall
-- **Storage**: Summarized documents with embeddings
+- **Purpose**: Long-term context and historical recall with constant token budget
+- **Storage**: 2-minute segment summaries with embeddings and memory propagation
 - **Retention**: Persists across stream session
-- **Granularity**: Low (high-level narrative)
+- **Granularity**: Medium (segment-level narrative with propagated memory)
 - **Use Case**: "What happened 20 minutes ago?" "How many times did they fight the boss?"
+- **Status**: ✅ **DONE** - Implemented with memory propagation (previous summary included)
 
-**Summary Types**:
+**Summary Structure**:
 
-1. **Now Summary** (last 1-2 min): "Streamer is fighting boss, health at 50%"
-2. **Recent Summary** (last 5 min): "Streamer attempted boss 3 times, died each time"
-3. **Session Summary** (optional): "Stream started with intro, now in boss fight section"
+- **Segment Summaries** (2-minute chunks): Condensed representation with key events, visual context, chat highlights, streamer commentary
+- **Memory Propagation**: Each summary includes previous segment summary for continuity
+- **Adaptive Selection**: Query-dependent summary retrieval using semantic similarity + temporal relevance
 
 **Data Structure**:
 
@@ -290,13 +291,15 @@ Chat Message → Node IRC → Python /chat/message → @mention check
 - Formula: `similarity_score * exp(-age_minutes / decay_constant)`
 - Decay constant: 5 minutes (configurable)
 
-**Hybrid Search**:
+**Hybrid Multi-Modal Search** ✅ **COMPLETE**:
 
-1. Search short-term transcripts (last 10 min)
-2. Search long-term summaries (entire session)
-3. Search events (raids, subs, polls)
-4. Search metadata (current game, title)
-5. Merge and rank by relevance + recency
+1. ✅ Search short-term transcripts (last 10 min)
+2. ✅ Search long-term summaries (entire session via JCB-35)
+3. ✅ Search events (raids, subs, polls)
+4. ✅ Search metadata (current game, title)
+5. ✅ Search video frames with grounded embeddings (JCB-31, JCB-37)
+6. ✅ Search chat messages (JCB-32)
+7. ✅ Merge and rank by relevance + recency with temporal alignment
 
 ### Agentic Groundwork (MVP-ready)
 
@@ -311,11 +314,26 @@ To prepare for a future agentic architecture without adding latency to MVP, we a
 
 These changes keep the current single-pass RAG fast while allowing an easy evolution to a node/edge graph later.
 
-### MVP 1.5 (Planned) – Agentic + Video Understanding
+### Phase 6: Video Understanding + MVP Memory Integration ✅ **COMPLETE**
 
-- Agentic graph with nodes: QueryRewrite → Multi-Retriever (transcripts/events/summaries/metadata) → Merger/Ranker → Compressor → Generator → Critic/Repair.
-- Video understanding: clip embeddings aligned to transcripts; scene/shot detectors; cross-modal ranking.
-- Policies: adaptive time windows, multi-hop retrieval, cost/time step limits, safety checks.
+**Status**: ✅ **DONE** - All components implemented and integrated
+
+**Completed Features**:
+- ✅ **JCB-31**: Video frame embeddings with CLIP (512→1536 projection)
+- ✅ **JCB-32**: Chat message embeddings with temporal alignment
+- ✅ **JCB-33**: Temporal alignment linking frames to transcripts, chat, and metadata
+- ✅ **JCB-41**: Visual description generation pipeline with hybrid lazy/cached strategy
+- ✅ **JCB-42**: Adaptive frame capture (5-10s intervals) with interesting frame detection
+- ✅ **JCB-37**: Grounded embeddings (70% CLIP + 30% description) for improved text queries
+- ✅ **JCB-35**: Memory-propagated summarization (2-minute segments) for long-term context
+
+**Current Capabilities**:
+- ✅ Multi-modal retrieval: transcripts, events, video frames, chat messages, summaries, metadata
+- ✅ Video understanding: Rich JSON descriptions with activities, UI elements, scene changes
+- ✅ Temporal alignment: Video frames linked to aligned transcripts, chat, and metadata
+- ✅ Grounded embeddings: Visual + text context fusion for better semantic search
+- ✅ Long-term memory: 2-minute segment summaries with memory propagation
+- ✅ Context enrichment: Retrieval includes aligned context for all modalities
 
 ---
 
@@ -420,6 +438,38 @@ Twitch Stream → Streamlink (Python) → Authenticated HLS URL → FFmpeg (Node
 5. [JCB-27] Multi-User Parallel Testing
 
 **Success Criteria**: Bot maintains context across multiple users for 5+ minutes
+
+---
+
+### Phase 6: Video Understanding + MVP Memory Integration ✅ **COMPLETE**
+
+**Goal**: Multi-modal understanding with video frames, visual descriptions, and enhanced memory
+
+**Linear Issues**: JCB-31, JCB-32, JCB-33, JCB-35, JCB-37, JCB-41, JCB-42
+
+**Tasks**:
+
+1. [JCB-31] ✅ Video Frame Embeddings - CLIP embeddings (512→1536 projection)
+2. [JCB-32] ✅ Chat Message Embeddings - Chat messages with embeddings and temporal alignment
+3. [JCB-33] ✅ Temporal Alignment - Link frames to transcripts, chat, and metadata
+4. [JCB-41] ✅ Visual Description Generation - Rich JSON descriptions with hybrid lazy/cached strategy
+5. [JCB-42] ✅ Adaptive Frame Capture - 5-10s intervals with interesting frame detection
+6. [JCB-37] ✅ Grounded Embeddings - Joint fusion (70% CLIP + 30% description) for better text queries
+7. [JCB-35] ✅ Memory-Propagated Summarization - 2-minute segment summaries with memory propagation
+
+**Success Criteria**: ✅ **COMPLETE**
+- Video frames have rich context (descriptions + aligned transcript/chat/metadata)
+- Grounded embeddings improve text query performance
+- Long-term memory via 2-minute segment summaries
+- Multi-modal retrieval across all sources
+
+**Key Achievements**:
+- ✅ Multi-modal retrieval: transcripts, events, video frames, chat messages, summaries, metadata
+- ✅ Video understanding: Rich JSON descriptions with activities, UI elements, scene changes
+- ✅ Temporal alignment: Video frames linked to aligned transcripts, chat, and metadata
+- ✅ Grounded embeddings: Visual + text context fusion for better semantic search
+- ✅ Long-term memory: 2-minute segment summaries with memory propagation
+- ✅ Context enrichment: Retrieval includes aligned context for all modalities
 
 ---
 

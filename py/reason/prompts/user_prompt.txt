@@ -1,6 +1,8 @@
-You will receive context entries from a Twitch stream (transcript chunks and event summaries) along with stream metadata. Use this information to answer the viewer's question helpfully.
+You will receive context entries from a Twitch stream (transcript chunks, event summaries, chat messages, video frames, and summaries) along with stream metadata. Use this information to answer the viewer's question helpfully.
 
 {conversation_history}
+
+**IMPORTANT**: The most recent summary (marked with [Most Recent Summary]) is always included at the top of the context entries. This represents the latest 2-minute segment of the stream and provides current context about what's happening. Use this summary to understand the most recent stream activity.
 
 Context entries:
 {context_section}
@@ -10,6 +12,14 @@ Never invent or make up specific timestamps, numbers, or facts. Only use informa
 
 Instructions:
 - Use context entries when they directly contain the answer (include timestamp citations like (~HH:MM:SS))
+- **Context entries may be structured as JSON objects**: Many context entries (especially video frames and summaries) are provided as JSON for better organization
+  - Video frame entries have type "video_frame" and contain: timestamp, description (may be JSON or text), transcript (object with text and timestamps), chat (array of message objects), and metadata (object with game/title info)
+  - Summary entries have type "summary" and contain: segment (start_time, end_time), key_events (array), visual_context (object), chat_highlights (array), streamer_commentary (string), and tone (string)
+  - Parse JSON structures to extract the information you need - the structured format makes it easier to find specific details
+- Context entries may include: transcripts (what the streamer said), events (raids, subs, etc.), chat messages (what viewers said), and video frames (what's visually on screen)
+- Chat messages are marked with [Chat] prefix and include username and message content
+- Video frames are marked with [Video Frame] prefix and represent visual snapshots of the stream
+- **Video frames are enriched with temporally-aligned context**: Each entry may include aligned transcripts (what the streamer was saying at that moment), aligned chat messages (what viewers were saying), and metadata snapshots (game/title at that moment). Use the description that follows the prefix to understand what is visible on screen, then incorporate any aligned transcript, chat, and metadata segments that appear alongside it.
 - Use stream metadata (from system prompt) for questions about current game, viewers, title, or stream status
 - If the question is relevant but exact answer isn't in context, make reasonable inferences based on available information
 - Be conversational and helpful - viewers appreciate context even if it's not perfect
@@ -42,14 +52,50 @@ Question Types and Examples:
    Q: "What's their current strategy?"
    A: "Based on recent conversation (~14:35:22), they're focusing on defensive positioning."
 
-4. INFERENCE QUESTIONS (make reasonable inferences):
+4. CHAT MESSAGE QUESTIONS (use chat context entries):
+   Q: "What did chat say about that?"
+   A: "Chat was discussing the strategy, with user123 saying 'that was a great play' (~14:36:45)." (from chat messages)
+   
+   Q: "What are viewers talking about?"
+   A: "Viewers in chat are excited about the boss fight and sharing tips (~14:38:20)." (from chat context)
+
+5. VIDEO FRAME QUESTIONS (use video frame context entries):
+   Q: "What's on screen right now?"
+   A: "Based on the video frame at ~14:40:10, they're in a boss fight with health at about 50%." (from video frame context)
+   
+   Q: "What was happening when that happened on screen?"
+   A: "At ~14:40:10, the video frame shows a boss fight. The aligned transcript shows they were discussing strategy, and chat was excited about the fight." (uses enriched context from video frame)
+   
+   NOTE: Video frames may be provided as JSON objects with type "video_frame":
+   - The description field may be a JSON object with structured fields (high_level_summary, participants, primary_scene, overlays, etc.) or plain text
+   - Transcript field contains aligned transcript object with text and timestamps
+   - Chat field contains array of chat message objects with username, message, and sent_at
+   - Metadata field contains game/title information at that moment
+   - Parse the JSON structure to extract visual details, aligned context, and metadata
+   - Use all available aligned context when answering questions about video frames
+
+6. SUMMARY QUESTIONS (use summary context entries):
+   Q: "What happened recently in the stream?"
+   A: "Based on the most recent summary (~14:40:00 to ~14:42:00), they completed a boss fight, chat was very excited, and they're now discussing strategy for the next area." (from most recent summary)
+   
+   Q: "What's been going on?"
+   A: "According to the most recent summary, they've been playing for about 2 minutes, focusing on a challenging boss fight with lots of viewer engagement in chat." (from summary context)
+   
+   NOTE: Summaries may be provided as JSON objects with type "summary":
+   - The JSON contains: segment (start_time, end_time), key_events (array of event objects), visual_context (object with activities, UI elements, scene changes), chat_highlights (array of chat objects), streamer_commentary (string), and tone (string)
+   - Summaries with "most_recent": true are always included at the top of context entries
+   - Other summary entries may appear from semantic search if relevant to the question
+   - Parse the JSON structure to extract key events, visual context, chat highlights, and commentary
+   - Summaries provide high-level overviews of stream activity, events, chat highlights, and visual context
+
+7. INFERENCE QUESTIONS (make reasonable inferences):
    Q: "Are they winning?"
    A: "Based on the recent discussion about score and strategy (~14:40:10), it sounds like they're doing well but the match is close." (inferred from context)
    
    Q: "What's happening right now?"
    A: "They're currently in Just Chatting, and from recent conversation (~14:42:30) they're discussing strategy with their team." (combines metadata + context)
 
-5. NO INFORMATION (only when truly nothing relevant):
+8. NO INFORMATION (only when truly nothing relevant):
    Q: "What's their favorite color?"
    A: "I don't have enough information to answer that - that hasn't come up in the stream."
 

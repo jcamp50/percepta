@@ -437,10 +437,22 @@ Based on the research and Percepta's specific requirements (live audio, video sc
 #### Tasks
 
 1. **Video Frame Embeddings**
-   - Capture screenshots every 2 seconds (as planned)
-   - Generate embeddings for each frame (CLIP or similar)
+   - Capture screenshots with adaptive 5-10 second intervals (based on activity)
+   - Generate CLIP embeddings for each frame (local model)
    - Store in new `video_frames` table with timestamps
    - Link to transcripts via temporal alignment
+
+1.6. **Visual Description Generation** ⭐ **NEW MVP SOLUTION**
+   - **Problem**: LLM cannot "see" what's in video frames (only sees file paths)
+   - **Solution**: GPT-4o-mini Vision API generates high-detail visual descriptions
+   - **Strategy**: Hybrid lazy/cached generation
+     - Cache hits: 30% (similar frames reuse descriptions)
+     - Immediate: 20% (high activity frames)
+     - Lazy: 50% (on-demand or before summarization)
+   - **Temporal Continuity**: Include previous frame descriptions for visual flow
+   - **Summarization Integration**: All lazy frames must have descriptions before 2-min summaries
+   - **Cost**: ~$0.50-$0.70 per 10-hour stream (with optimizations)
+   - **See**: `CONTEXT_LAYER_EXPANSION.md` section 1.6 for detailed implementation
 
 2. **Chat Message Embeddings**
    - Store chat messages with embeddings
@@ -461,10 +473,22 @@ CREATE TABLE video_frames (
     id UUID PRIMARY KEY,
     channel_id VARCHAR(255) NOT NULL,
     captured_at TIMESTAMP WITH TIME ZONE NOT NULL,
-    image_url TEXT,  -- or base64, or storage path
-    embedding VECTOR(1536),
-    transcription_id UUID REFERENCES transcripts(id),
+    image_path TEXT NOT NULL,
+    embedding VECTOR(1536) NOT NULL,
+    
+    -- Visual description (NEW)
+    description TEXT,  -- High-detail visual description from GPT-4o-mini Vision API
+    description_source VARCHAR(50),  -- "immediate", "lazy", "cache"
+    frame_hash VARCHAR(64),  -- Perceptual hash for caching similar frames
+    
+    -- Temporal alignment
+    transcript_id UUID REFERENCES transcripts(id),
+    aligned_chat_ids TEXT[],  -- Array of chat message IDs
+    metadata_snapshot JSONB,  -- Channel metadata at capture time
+    
     INDEX idx_video_frames_channel_time (channel_id, captured_at),
+    INDEX idx_video_frames_hash (frame_hash),  -- For cache lookups
+    INDEX idx_video_frames_lazy (channel_id, description_source),  -- For lazy generation
     INDEX idx_video_frames_embedding USING ivfflat (embedding vector_cosine_ops)
 );
 
@@ -484,8 +508,9 @@ CREATE TABLE chat_messages (
 #### Implementation Files
 
 - `py/memory/video_store.py` - Video frame storage and retrieval
+- `py/utils/video_descriptions.py` - GPT-4o-mini Vision API integration for descriptions
 - `py/memory/chat_store.py` - Chat message storage and retrieval
-- `py/reason/retriever.py` - Extend to multi-source retrieval
+- `py/reason/retriever.py` - Extend to multi-source retrieval (includes visual descriptions)
 
 ---
 
@@ -497,7 +522,8 @@ CREATE TABLE chat_messages (
 
 1. **Segment-Based Encoding**
    - Group transcripts/video into 2-minute segments
-   - Generate condensed summaries for each segment
+   - **CRITICAL**: Pre-generate descriptions for all lazy video frames before summarization
+   - Generate condensed summaries for each segment (includes video frame descriptions)
    - Propagate condensed memory forward
    - Maintain constant token budget
 
@@ -769,9 +795,13 @@ LLM Answer Generation
 
 **With Video** (MVP 1.5):
 - Video capture: < 0.5s (screenshot)
-- Frame embedding: 100-400ms (CLIP local or API)
-- **Additional**: +100-400ms per frame
-- **Mitigation**: Batch embeddings, async processing
+- CLIP embedding: 100-400ms (local model)
+- Visual description: 1-3s (GPT-4o-mini Vision API, async/lazy)
+- **Additional**: +100-400ms per frame (CLIP), +1-3s for descriptions (async)
+- **Mitigation**: 
+  - Batch CLIP embeddings
+  - Async description generation (lazy/cached strategy)
+  - Pre-generate descriptions before summarization
 
 **With KV Cache** (Phase 3):
 - Cache lookup: < 10ms (in-memory)
@@ -785,9 +815,14 @@ LLM Answer Generation
 - LLM: $0.15/$0.60 per 1M tokens (gpt-4o-mini / gpt-4o)
 
 **With Video** (MVP 1.5):
-- Option 1: OpenAI CLIP API (if available) - $X per image
-- Option 2: Local CLIP model - GPU required, no API cost
-- **Recommendation**: Start with local CLIP for cost control
+- **CLIP Embeddings**: Local CLIP model - GPU required, no API cost
+- **Visual Descriptions**: GPT-4o-mini Vision API
+  - Input: $0.150 per 1M tokens (~270 tokens per frame)
+  - Output: $0.600 per 1M tokens (~250 tokens per description)
+  - Cost per frame: ~$0.00019
+  - With adaptive intervals (5-10s): ~$0.103/hour = ~$1.03 per 10-hour stream
+  - With hybrid lazy/cached: ~$0.05-$0.07/hour = **~$0.50-$0.70 per 10-hour stream**
+- **Recommendation**: Local CLIP for embeddings, GPT-4o-mini Vision API for descriptions with hybrid strategy
 
 **With Summarization** (Phase 2):
 - Summarization API calls: $0.15 per 1M tokens (gpt-4o-mini)
@@ -804,6 +839,14 @@ LLM Answer Generation
    - Enables visual context understanding
    - Use local CLIP model to control costs
    - Batch embeddings for efficiency
+
+1.6. **Visual Description Generation** (High Priority) ⭐ **NEW**
+   - Solves visual information gap (LLM can now "see" frames)
+   - GPT-4o-mini Vision API with hybrid lazy/cached generation
+   - Adaptive 5-10s capture intervals for cost optimization
+   - Temporal continuity with previous frame descriptions
+   - **Cost**: ~$0.50-$0.70 per 10-hour stream
+   - **See**: `CONTEXT_LAYER_EXPANSION.md` section 1.6
 
 2. **Chat Message Storage** (High Priority)
    - Enables chat-aware retrieval
@@ -848,7 +891,7 @@ LLM Answer Generation
 - **Latency**: < 5s total (audio event → chat response)
 - **Accuracy**: > 80% relevant answers (human evaluation)
 - **Memory Efficiency**: < 1GB per 10-hour stream (compressed)
-- **Cost**: < $0.50 per 10-hour stream (API costs)
+- **Cost**: < $1.00 per 10-hour stream (with video descriptions: ~$0.50-$0.70)
 
 ### Quality Metrics
 
@@ -904,7 +947,14 @@ The recommended roadmap provides a clear path from current MVP to enhanced conte
 
 ---
 
-**Document Version**: 1.0  
+**Document Version**: 2.0  
 **Last Updated**: 2025-01-30  
 **Next Review**: After MVP 1.5 implementation
+
+**Major Updates (v2.0)**:
+- Added Visual Description Generation (Section 1.6) to Phase 1 implementation roadmap
+- Updated database schema to include description fields
+- Updated cost analysis with GPT-4o-mini Vision API pricing
+- Updated performance considerations with visual description latency
+- Documented summarization integration requirement for lazy frames
 

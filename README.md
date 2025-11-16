@@ -6,13 +6,15 @@
 [![Phase 2](https://img.shields.io/badge/Phase%202-Complete-success)](https://linear.app/jcbuilds/project/percepta-ai-twitch-chat-bot-ead8d9ea69f6)
 [![Phase 3](https://img.shields.io/badge/Phase%203-Complete-success)](https://linear.app/jcbuilds/project/percepta-ai-twitch-chat-bot-ead8d9ea69f6)
 [![Phase 4](https://img.shields.io/badge/Phase%204-Complete-success)](https://linear.app/jcbuilds/project/percepta-ai-twitch-chat-bot-ead8d9ea69f6)
+[![Phase 5](https://img.shields.io/badge/Phase%205-Complete-success)](https://linear.app/jcbuilds/project/percepta-ai-twitch-chat-bot-ead8d9ea69f6)
+[![Phase 6](https://img.shields.io/badge/Phase%206-Complete-success)](https://linear.app/jcbuilds/project/percepta-ai-twitch-chat-bot-ead8d9ea69f6)
 [![Linear](https://img.shields.io/badge/Linear-Project-blue)](https://linear.app/jcbuilds/project/percepta-ai-twitch-chat-bot-ead8d9ea69f6)
 
 ## What is Percepta?
 
-Percepta is an AI-powered Twitch chat bot that provides real-time, contextual answers about what's happening in a live stream. It listens to chat, transcribes stream audio, tracks channel events, stores real-time event data, and uses RAG (Retrieval-Augmented Generation) to answer viewer questions with grounded, timestamped responses using combined transcript and event context.
+Percepta is an AI-powered Twitch chat bot that provides real-time, contextual answers about what's happening in a live stream. It listens to chat, transcribes stream audio, captures video frames, tracks channel events, stores real-time event data, and uses RAG (Retrieval-Augmented Generation) to answer viewer questions with grounded, timestamped responses using multi-modal context (transcripts, video, chat, events, summaries, metadata).
 
-**Current Status:** Phase 4 Complete - Enhanced context with metadata & events | Phase 5 In Progress - Agent orchestration
+**Current Status:** Phase 6 Complete ✅ - Video Understanding + MVP Memory Integration | Multi-modal AI assistant with visual understanding and long-term memory
 
 ## Quick Start (Phase 1)
 
@@ -98,34 +100,51 @@ The bot should respond: `@yourusername pong`
 - [x] Metadata integration in RAG responses
 - [x] Comprehensive testing (84% success rate across question types)
 
-### 🚧 Phase 5: Agent Orchestration (In Progress)
+### ✅ Phase 5: Summarization + Multi-User (Complete)
 
-- [ ] LangGraph agent framework integration
-- [ ] Multi-step reasoning capabilities
-- [ ] Enhanced agent memory and state management
-- [ ] Tool use for extended capabilities
+- [x] Redis session management for parallel conversations
+- [x] Periodic summarization job for long-term context
+- [x] Fallback agent for out-of-context questions
+- [x] Rate limiting & safety measures
+- [x] Multi-user parallel testing
+
+### ✅ Phase 6: Video Understanding + MVP Memory Integration (Complete)
+
+- [x] Video frame embeddings with CLIP (512→1536 projection)
+- [x] Chat message embeddings with temporal alignment
+- [x] Temporal alignment linking frames to transcripts, chat, and metadata
+- [x] Visual description generation pipeline (rich JSON descriptions)
+- [x] Adaptive frame capture (5-10s intervals) with interesting frame detection
+- [x] Grounded embeddings (70% CLIP + 30% description) for improved text queries
+- [x] Memory-propagated summarization (2-minute segments) for long-term context
+- [x] Multi-modal retrieval across all sources (transcripts, video, chat, events, summaries, metadata)
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────┐
 │              TWITCH STREAM                           │
-│         (Audio + Chat + Events)                      │
+│    (Audio + Video + Chat + Events)                    │
 └────────────┬────────────────────────┬────────────────┘
              │                        │
     ┌────────▼────────┐      ┌────────▼────────┐
     │  Node Service   │      │  Twitch APIs    │
     │  - IRC (tmi.js) │      │  - Helix API    │
-    │  - Audio Capture│      │  - EventSub     │
-    │    (FFmpeg)     │      │    (future)     │
+    │  - Audio Capture│      │  - EventSub WS  │
+    │    (FFmpeg)     │      │                  │
+    │  - Video Capture│      │                  │
+    │    (Screenshots)│      │                  │
     └────────┬────────┘      └────────┬────────┘
              │                        │
     ┌────────▼────────────────────────▼────────┐
     │    Python Backend (FastAPI)              │
     │  - Streamlink (audio URL extraction)     │
     │  - Transcription (faster-whisper)       │
+    │  - Video Frame Processing (CLIP)         │
+    │  - Visual Description Generation        │
     │  - Vector Store (pgvector)               │
-    │  - RAG Retrieval                         │
+    │  - Multi-Modal RAG Retrieval             │
+    │  - Memory-Propagated Summarization      │
     │  - Response Generation                   │
     └─────────────────┬────────────────────────┘
                       │
@@ -135,17 +154,25 @@ The bot should respond: `@yourusername pong`
               └────────────────┘
 ```
 
-**Phase 1-4 Implementation:**
+**Phase 1-6 Implementation:**
 
-- **Chat Flow**: Node.js forwards ALL chat messages to Python `/chat/message`
+- **Chat Flow**: Node.js forwards ALL chat messages to Python `/chat/message`, stores with embeddings (JCB-32)
 - **Audio Flow**:
   - Node.js requests authenticated audio-only stream URLs from Python `/api/get-audio-stream-url` (uses Streamlink)
   - Node.js captures audio with FFmpeg, chunks into 15-second segments
   - Node.js sends audio chunks to Python `/transcribe` endpoint
   - Python transcribes with faster-whisper, generates embeddings, stores in pgvector
+- **Video Flow** (Phase 6):
+  - Node.js captures video screenshots at adaptive 5-10s intervals (JCB-42)
+  - Node.js sends frames to Python `/api/video-frame` endpoint
+  - Python generates CLIP embeddings, visual descriptions (JCB-41), and grounded embeddings (JCB-37)
+  - Python performs temporal alignment with transcripts, chat, and metadata (JCB-33)
 - **Metadata Flow**: Python polls Twitch Helix API every 60 seconds for channel/stream metadata, stores snapshots
 - **Event Flow**: Python connects to EventSub WebSocket, receives real-time events (raids, subscriptions, stream online/offline), generates summaries, stores with embeddings
-- **RAG Flow**: Python retrieves relevant transcripts and events, includes metadata in system prompt, generates contextual answers with combined context
+- **Memory Flow** (Phase 6):
+  - Python generates 2-minute segment summaries with memory propagation (JCB-35)
+  - Summaries include visual context, chat highlights, and streamer commentary
+- **Multi-Modal RAG Flow**: Python retrieves from all sources (transcripts, video frames, chat, events, summaries, metadata), enriches with temporal alignment, generates contextual answers with multi-modal context
 - **Response Flow**: Node polls Python `/chat/send` every 500ms, sends responses to Twitch chat
 
 ## Technology Stack
@@ -156,23 +183,30 @@ The bot should respond: `@yourusername pong`
 - Pydantic - Data validation
 - Streamlink - Twitch audio-only stream URL extraction
 - faster-whisper - Speech-to-text transcription
-- LangGraph, pgvector, OpenAI
+- CLIP (transformers) - Video frame embeddings
+- pgvector - Vector similarity search
+- OpenAI API - Text embeddings, GPT-4o-mini (reasoning), GPT-4o-mini Vision (descriptions)
+- Redis - Session management
 
 **Node.js Services:**
 
 - tmi.js - Twitch IRC client
 - axios - HTTP client
 - fluent-ffmpeg - Audio capture and chunking
+- Screenshot capture - Video frame capture (adaptive 5-10s intervals)
 
 **Infrastructure:**
 
-- PostgreSQL + pgvector _(future)_
-- Redis _(future)_
-- Docker Compose
+- PostgreSQL + pgvector - Vector database for embeddings
+- Redis - Session state and rate limiting
+- Docker Compose - Local development environment
 
 ## Documentation
 
 - **[Architecture & Planning](docs/ARCHITECTURE.md)** - Comprehensive technical documentation
+- **[Phase 6 Completion Summary](docs/PHASE_6_COMPLETE.md)** - Video understanding & memory integration
+- **[Video Frame Implementation Roadmap](docs/VIDEO_FRAME_IMPLEMENTATION_ROADMAP.md)** - Video understanding details
+- **[Context Layer Expansion](docs/CONTEXT_LAYER_EXPANSION.md)** - Multi-modal context implementation
 - **[Detailed Setup Guide](docs/DETAILED_SETUP.md)** - Step-by-step installation
 - **[Twitch Setup](docs/TWITCH_SETUP.md)** - Creating bot account
 - **[OAuth Quickstart](docs/OAUTH_QUICKSTART.md)** - Generating tokens
@@ -270,6 +304,7 @@ Track progress and issues: [Percepta - AI Twitch Chat Bot](https://linear.app/jc
 
 ---
 
-**Last Updated**: 2025-11-04  
-**Current Phase**: Phase 4 Complete ✅  
-**Next Milestone**: Phase 5 - Agent Orchestration (JCB-23 through JCB-28)
+**Last Updated**: 2025-11-15  
+**Current Phase**: Phase 6 Complete ✅ - Video Understanding + MVP Memory Integration  
+**Completed Issues**: JCB-31, JCB-32, JCB-33, JCB-35, JCB-37, JCB-41, JCB-42  
+**Next Milestone**: Post-MVP enhancements (JCB-34, JCB-36, JCB-38, JCB-39, JCB-40)

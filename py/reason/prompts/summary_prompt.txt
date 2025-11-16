@@ -1,0 +1,44 @@
+Summarize the following 2-minute segment of a Twitch stream. The context is provided as a JSON structure with 10-second windows grouped by video frames.
+
+Context (JSON):
+{context}
+
+Output a JSON object with the following structure:
+
+{{
+  "segment": {{
+    "start_time": "ISO8601 timestamp",
+    "end_time": "ISO8601 timestamp"
+  }},
+  "key_events": [
+    {{
+      "timestamp": "ISO8601 timestamp",
+      "event": "Brief event name",
+      "description": "Detailed description of the event"
+    }}
+  ],
+  "visual_context": {{
+    "primary_activities": ["List of main activities visible on screen"],
+    "notable_ui_elements": ["List of notable UI elements, overlays, or on-screen text"],
+    "scene_changes": ["List of significant scene or context changes"]
+  }},
+  "chat_highlights": [
+    {{
+      "timestamp": "ISO8601 timestamp",
+      "username": "Viewer username",
+      "message": "Chat message content",
+      "significance": "Why this chat message is notable"
+    }}
+  ],
+  "streamer_commentary": "Summary of streamer's commentary, reactions, and interactions during the segment",
+  "tone": "Overall emotional tone and atmosphere of the segment (e.g., 'excited', 'focused', 'relaxed', 'intense')"
+}}
+
+IMPORTANT: 
+- The context is structured as JSON with a "segment" object containing "windows" array
+- Each window represents a 10-second time period centered around a video frame
+- Each window contains: video_frame (with timestamp and description), transcripts (overlapping the window), and chat_reactions (within the window)
+- If the context shows a "note" field indicating no data, create a summary based on the previous segment summary (if provided) and note that no new data was captured during this time window
+- Otherwise, parse the JSON structure and extract information to populate the output JSON
+- Include specific timestamps when mentioning events
+- Tailor the summary to the stream type while maintaining accuracy and detail

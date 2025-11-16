@@ -14,13 +14,19 @@ Why FastAPI?
 - Fast and production-ready
 """
 
-from fastapi import FastAPI, HTTPException, File, UploadFile, Form
-from fastapi.middleware.cors import CORSMiddleware
-from datetime import datetime, timezone
-from typing import Optional, List
+import json
 import logging
+import os
+import re
+import tempfile
 import time
 import uuid
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+from typing import Optional, List
+
+from fastapi import FastAPI, HTTPException, File, UploadFile, Form
+from fastapi.middleware.cors import CORSMiddleware
 
 from py.config import settings
 from schemas.messages import (
@@ -40,10 +46,16 @@ from py.ingest.twitch import EventSubWebSocketClient
 from py.ingest.metadata import ChannelMetadataPoller
 from py.ingest.event_handler import EventHandler
 from py.memory.vector_store import VectorStore
+from py.memory.video_store import VideoStore
+from py.memory.chat_store import ChatStore
+from py.ingest.video import determine_capture_interval
 from py.memory.redis_session import RedisSessionManager
 from py.utils.embeddings import embed_text
 from py.utils.logging import get_logger
 from py.utils.content_filter import is_safe_for_chat, filter_response_content
+from py.utils.twitch_api import get_broadcaster_id_from_channel_name
+
+RAG_ASK_LOG_ROOT = Path(__file__).resolve().parents[1] / "logs" / "rag_tests" / "ask"
 
 # Configure logging
 # TASK: Set up Python logging
@@ -67,6 +79,7 @@ logger = get_logger(__name__, category="system")
 # Category-specific loggers for different endpoints
 chat_logger = get_logger(f"{__name__}.chat", category="chat")
 audio_logger = get_logger(f"{__name__}.audio", category="audio")
+video_logger = get_logger(f"{__name__}.video", category="video")
 stream_event_logger = get_logger(f"{__name__}.eventsub", category="stream_event_sub")
 stream_metadata_logger = get_logger(f"{__name__}.metadata", category="stream_metadata")
 
@@ -89,6 +102,64 @@ def filter_access_log(record):
 
 # Add filter to access logger
 access_logger.addFilter(filter_access_log)
+
+
+def _safe_path_component(value: str) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9_.-]", "_", value)
+    return sanitized or "unknown"
+
+
+def _json_default(value):  # type: ignore[no-untyped-def]
+    if isinstance(value, datetime):
+        return value.isoformat() + "Z"
+    if isinstance(value, timedelta):
+        return value.total_seconds()
+    return str(value)
+
+
+def log_rag_ask_event(
+    *,
+    channel_id: str,
+    question: str,
+    result: dict,
+    system_prompt: str,
+    user_prompt: str,
+    metadata: Optional[dict] = None,
+) -> None:
+    event_time = datetime.utcnow()
+    timestamp_str = event_time.replace(microsecond=0).isoformat() + "Z"
+
+    payload = {
+        "timestamp": timestamp_str,
+        "channel_id": channel_id,
+        "question": question,
+        "system_prompt": system_prompt,
+        "user_prompt": user_prompt,
+        "answer": result.get("answer"),
+        "citations": result.get("citations", []),
+        "context": result.get("context", []),
+        "chunks": result.get("chunks", []),
+        "metadata": metadata or {},
+    }
+
+    safe_channel = _safe_path_component(str(channel_id))
+    channel_dir = RAG_ASK_LOG_ROOT / safe_channel
+
+    try:
+        channel_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"{event_time.strftime('%Y%m%dT%H%M%S%f')}Z_success.json"
+        (channel_dir / filename).write_text(
+            json.dumps(payload, indent=2, default=_json_default),
+            encoding="utf-8",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Failed to write RAG ask log for channel %s: %s",
+            channel_id,
+            exc,
+            exc_info=True,
+        )
+
 
 # Create FastAPI app
 # TASK: Create FastAPI instance
@@ -149,12 +220,6 @@ if settings.admin_users:
         user.strip().lower() for user in settings.admin_users.split(",") if user.strip()
     ]
 
-try:
-    rag_service: Optional[RAGService] = RAGService()
-except ValueError as exc:
-    logger.warning("RAG service unavailable: %s", exc)
-    rag_service = None
-
 # Initialize transcription service (singleton)
 try:
     transcription_service: Optional[TranscriptionService] = (
@@ -172,6 +237,57 @@ try:
 except Exception as exc:
     logger.warning("Vector store unavailable: %s", exc)
     vector_store = None
+
+# Initialize video store for video frame storage
+try:
+    video_store: Optional[VideoStore] = VideoStore()
+    logger.info("Video store initialized")
+except Exception as exc:
+    logger.warning("Video store unavailable: %s", exc)
+    video_store = None
+
+# Initialize chat store for chat message storage
+try:
+    chat_store: Optional[ChatStore] = ChatStore()
+    logger.info("Chat store initialized")
+except Exception as exc:
+    logger.warning("Chat store unavailable: %s", exc)
+    chat_store = None
+
+# Initialize summarizer for memory-propagated summarization
+try:
+    from py.memory.summarizer import Summarizer
+
+    summarizer: Optional[Summarizer] = None
+    if vector_store and video_store and chat_store:
+        summarizer = Summarizer(
+            video_store=video_store,
+            vector_store=vector_store,
+            chat_store=chat_store,
+        )
+        logger.info("Summarizer initialized")
+    else:
+        logger.warning(
+            "Summarizer not initialized: missing required stores (vector=%s, video=%s, chat=%s)",
+            vector_store is not None,
+            video_store is not None,
+            chat_store is not None,
+        )
+except Exception as exc:
+    logger.warning("Summarizer unavailable: %s", exc)
+    summarizer = None
+
+# Initialize RAG service (after stores are initialized)
+try:
+    rag_service: Optional[RAGService] = RAGService(
+        vector_store=vector_store,
+        video_store=video_store,
+        chat_store=chat_store,
+        summarizer=summarizer,
+    )
+except ValueError as exc:
+    logger.warning("RAG service unavailable: %s", exc)
+    rag_service = None
 
 # Initialize Redis session manager
 session_manager: Optional[RedisSessionManager] = None
@@ -221,35 +337,6 @@ if settings.metadata_poll_enabled:
 # ============================================================================
 # ENDPOINTS
 # ============================================================================
-
-
-@app.get("/health")
-async def health_check():
-    """
-    Health check endpoint
-
-    Returns service status. Used by:
-    - Docker health checks
-    - Load balancers
-    - Monitoring systems
-    """
-    global eventsub_client
-    eventsub_status = "disconnected"
-    if eventsub_client:
-        if eventsub_client.is_connected:
-            eventsub_status = "connected"
-        else:
-            eventsub_status = "disconnected"
-
-    return {
-        "status": "healthy",
-        "service": "percepta-python",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "eventsub": {
-            "enabled": settings.eventsub_enabled,
-            "status": eventsub_status,
-        },
-    }
 
 
 def is_admin_user(username: str) -> bool:
@@ -326,6 +413,40 @@ async def receive_message(message: ChatMessage):
         chat_logger.debug(
             f"Received @mention from {message.username} in #{message.channel}: {message.message}"
         )
+
+    # Store chat message with embedding (if chat_store is available)
+    if chat_store is not None:
+        try:
+            # Convert channel name to broadcaster ID (same pattern as transcripts)
+            channel_broadcaster_id = message.channel
+            broadcaster_id = await get_broadcaster_id_from_channel_name(message.channel)
+            if broadcaster_id:
+                channel_broadcaster_id = broadcaster_id
+
+            # Generate embedding for message
+            embedding = await embed_text(message.message)
+
+            # Ensure timestamp is timezone-aware (UTC)
+            sent_at = message.timestamp
+            if sent_at.tzinfo is None:
+                from datetime import timezone
+
+                sent_at = sent_at.replace(tzinfo=timezone.utc)
+
+            # Store message in chat_store
+            await chat_store.insert_message(
+                channel_id=channel_broadcaster_id,
+                username=message.username,
+                message=message.message,
+                sent_at=sent_at,
+                embedding=embedding,
+            )
+        except Exception as store_exc:
+            # Log error but don't fail the request (graceful degradation)
+            chat_logger.warning(
+                f"Failed to store chat message from {message.username} in {message.channel}: {store_exc}",
+                exc_info=True,
+            )
 
     # Check for admin commands first (!pause, !resume, !status)
     admin_response = await handle_admin_command(message)
@@ -522,16 +643,12 @@ async def receive_message(message: ChatMessage):
                 try:
                     # Convert channel name to broadcaster ID for RAG queries
                     channel_broadcaster_id = message.channel
-                    if eventsub_client and eventsub_client.http_client:
-                        try:
-                            broadcaster_id = await eventsub_client._get_broadcaster_id(
-                                message.channel
-                            )
-                            if broadcaster_id:
-                                channel_broadcaster_id = broadcaster_id
-                        except Exception:
-                            # Fallback to channel name if conversion fails
-                            pass
+                    # Try to get broadcaster ID using shared utility function
+                    broadcaster_id = await get_broadcaster_id_from_channel_name(
+                        message.channel
+                    )
+                    if broadcaster_id:
+                        channel_broadcaster_id = broadcaster_id
 
                     # Trigger RAG query asynchronously with user session history
                     result = await rag_service.answer(
@@ -725,20 +842,12 @@ async def rag_answer(request: RAGQueryRequest):
 
     # Convert channel name to broadcaster ID if needed
     # If it's numeric, assume it's already a broadcaster ID
-    # Otherwise, try to convert it
+    # Otherwise, try to convert it using shared utility function
     channel_id = request.channel
-    if (
-        not request.channel.isdigit()
-        and eventsub_client
-        and eventsub_client.http_client
-    ):
-        try:
-            broadcaster_id = await eventsub_client._get_broadcaster_id(request.channel)
-            if broadcaster_id:
-                channel_id = broadcaster_id
-        except Exception:
-            # Fallback to original value if conversion fails
-            pass
+    if not request.channel.isdigit():
+        broadcaster_id = await get_broadcaster_id_from_channel_name(request.channel)
+        if broadcaster_id:
+            channel_id = broadcaster_id
 
     try:
         result = await rag_service.answer(
@@ -754,7 +863,112 @@ async def rag_answer(request: RAGQueryRequest):
         logger.exception("Failed to generate RAG answer")
         raise HTTPException(status_code=500, detail="Failed to generate answer")
 
+    request_metadata = {
+        "source": "api",
+        "request_channel": request.channel,
+        "top_k": request.top_k,
+        "half_life_minutes": request.half_life_minutes,
+        "prefilter_limit": request.prefilter_limit,
+    }
+    # Remove None values to keep metadata clean
+    request_metadata = {
+        key: value for key, value in request_metadata.items() if value is not None
+    }
+    prompts = result.get("prompts", {})
+    log_rag_ask_event(
+        channel_id=str(channel_id),
+        question=request.question,
+        result=result,
+        system_prompt=prompts.get("system", ""),
+        user_prompt=prompts.get("user", ""),
+        metadata=request_metadata,
+    )
+
     return RAGAnswerResponse(**result)
+
+
+@app.get("/api/debug-credentials")
+async def debug_credentials():
+    """Debug endpoint to check what credentials are loaded"""
+    client_id = settings.twitch_client_id or ""
+    bot_token = settings.twitch_bot_token or ""
+
+    return {
+        "client_id_present": bool(client_id),
+        "client_id_length": len(client_id),
+        "client_id_prefix": client_id[:10] if client_id else None,
+        "bot_token_present": bool(bot_token),
+        "bot_token_length": len(bot_token),
+        "bot_token_prefix": bot_token[:10] if bot_token else None,
+        "bot_token_has_oauth_prefix": (
+            bot_token.startswith("oauth:") if bot_token else False
+        ),
+    }
+
+
+@app.get("/health")
+async def health_check():
+    """
+    Health check endpoint to verify service is working correctly.
+
+    Returns service status. Used by:
+    - Docker health checks
+    - Load balancers
+    - Monitoring systems
+
+    Tests broadcaster ID lookup to ensure the service can communicate with Twitch API.
+    Uses TARGET_CHANNEL from .env for validation.
+    """
+    global eventsub_client
+    eventsub_status = "disconnected"
+    if eventsub_client:
+        if eventsub_client.is_connected:
+            eventsub_status = "connected"
+        else:
+            eventsub_status = "disconnected"
+
+    # Test broadcaster ID lookup using configured target channel
+    broadcaster_id_lookup_status = "skipped"
+    broadcaster_id_lookup_error = None
+    test_channel = None
+    test_broadcaster_id = None
+
+    if settings.target_channel:
+        try:
+            test_id = await get_broadcaster_id_from_channel_name(
+                settings.target_channel
+            )
+            if test_id:
+                broadcaster_id_lookup_status = "working"
+                test_channel = settings.target_channel
+                test_broadcaster_id = test_id
+            else:
+                broadcaster_id_lookup_status = "failed"
+                broadcaster_id_lookup_error = "Broadcaster ID lookup returned None"
+                test_channel = settings.target_channel
+        except Exception as e:
+            broadcaster_id_lookup_status = "error"
+            broadcaster_id_lookup_error = str(e)
+            test_channel = settings.target_channel
+            logger.error(
+                f"Health check broadcaster ID lookup failed: {e}", exc_info=True
+            )
+
+    return {
+        "status": "healthy",
+        "service": "percepta-python",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "eventsub": {
+            "enabled": settings.eventsub_enabled,
+            "status": eventsub_status,
+        },
+        "broadcaster_id_lookup": {
+            "status": broadcaster_id_lookup_status,
+            "test_channel": test_channel,
+            "test_broadcaster_id": test_broadcaster_id,
+            "error": broadcaster_id_lookup_error,
+        },
+    }
 
 
 @app.get("/api/get-broadcaster-id")
@@ -771,21 +985,26 @@ async def get_broadcaster_id(channel_name: str):
     Returns:
         JSON with broadcaster_id
     """
-    if not eventsub_client or not eventsub_client.http_client:
-        raise HTTPException(status_code=503, detail="EventSub client not available")
-
     try:
-        broadcaster_id = await eventsub_client._get_broadcaster_id(channel_name)
-        if not broadcaster_id:
+        # Use shared utility function that matches metadata poller pattern
+        broadcaster_id = await get_broadcaster_id_from_channel_name(channel_name)
+
+        if broadcaster_id:
+            return {"broadcaster_id": broadcaster_id, "channel_name": channel_name}
+        else:
             raise HTTPException(
-                status_code=404, detail=f"Channel not found: {channel_name}"
+                status_code=404,
+                detail=f"Channel not found: {channel_name}. Failed to get broadcaster ID from Twitch API.",
             )
-        return {"broadcaster_id": broadcaster_id, "channel_name": channel_name}
-    except Exception as exc:
-        logger.error(f"Failed to get broadcaster ID: {exc}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            f"Unexpected error in get_broadcaster_id endpoint: {e}", exc_info=True
+        )
         raise HTTPException(
-            status_code=500, detail=f"Failed to get broadcaster ID: {str(exc)}"
-        ) from exc
+            status_code=500, detail=f"Failed to get broadcaster ID: {str(e)}"
+        )
 
 
 @app.get("/api/get-audio-stream-url", response_model=AudioStreamUrlResponse)
@@ -820,7 +1039,7 @@ async def get_audio_stream_url(channel_id: str):
             )
             return AudioStreamUrlResponse(
                 channel_id=channel_id,
-                stream_url="",
+                stream_url=None,
                 quality="audio_only",
                 available=False,
             )
@@ -862,6 +1081,186 @@ async def get_audio_stream_url(channel_id: str):
         )
         raise HTTPException(
             status_code=500, detail=f"Failed to get stream URL: {str(exc)}"
+        ) from exc
+
+
+@app.get("/api/get-video-stream-url", response_model=AudioStreamUrlResponse)
+async def get_video_stream_url(channel_id: str):
+    """
+    Get authenticated Twitch video stream URL using Streamlink.
+
+    This endpoint uses Streamlink's Python API to obtain authenticated HLS URLs
+    for Twitch video streams. Streamlink handles all authentication internally,
+    including OAuth tokens and client-integrity tokens.
+
+    Returns an HLS URL that can be used directly with FFmpeg for video capture.
+    """
+    try:
+        import streamlink
+
+        # Create Streamlink session
+        session = streamlink.Streamlink()
+
+        # Get streams for the Twitch channel
+        twitch_url = f"https://www.twitch.tv/{channel_id}"
+        streams = session.streams(twitch_url)
+
+        # Get the best quality video stream (or worst for lower bandwidth)
+        video_stream = streams.get("best")
+
+        if video_stream is None:
+            # Stream is not available (offline or restricted)
+            return AudioStreamUrlResponse(
+                channel_id=channel_id, available=False, stream_url=None
+            )
+
+        # Get the HLS URL
+        stream_url = video_stream.url
+
+        return AudioStreamUrlResponse(
+            channel_id=channel_id, available=True, stream_url=stream_url
+        )
+
+    except ImportError:
+        logger.error(
+            "Streamlink not installed. Please install with: pip install streamlink"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Streamlink library not available. Please install streamlink.",
+        )
+    except streamlink.exceptions.NoPluginError:
+        logger.error(f"No Streamlink plugin found for Twitch URL: {twitch_url}")
+        raise HTTPException(
+            status_code=500, detail="Streamlink Twitch plugin not available"
+        )
+    except streamlink.exceptions.PluginError as exc:
+        logger.error(f"Streamlink plugin error for channel {channel_id}: {str(exc)}")
+        raise HTTPException(status_code=502, detail=f"Failed to get stream: {str(exc)}")
+    except Exception as exc:
+        logger.exception(
+            f"Unexpected error getting video stream URL for channel {channel_id}"
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get stream URL: {str(exc)}"
+        ) from exc
+
+
+@app.post("/api/video-frame")
+async def receive_video_frame(
+    image_file: UploadFile = File(..., description="Video frame image (JPEG/PNG)"),
+    channel_id: str = Form(..., description="Broadcaster channel ID"),
+    captured_at: str = Form(..., description="ISO timestamp when frame was captured"),
+    interesting_hint: Optional[str] = Form(
+        None, description="Optional hint that frame may be interesting"
+    ),
+):
+    """
+    Receive video frame screenshot from Node service and store in vector DB.
+
+    Complete pipeline: image → CLIP embedding → vector DB storage.
+    Receives screenshot images from Twitch streams, generates CLIP embeddings,
+    and stores frames in pgvector for RAG queries.
+    """
+    if video_store is None:
+        raise HTTPException(status_code=503, detail="Video store unavailable")
+
+    try:
+        # Read image file content
+        image_content = await image_file.read()
+        file_size = len(image_content)
+
+        video_logger.info(
+            f"Received video frame: channel={channel_id}, "
+            f"size={file_size} bytes, captured_at={captured_at}"
+        )
+
+        # Validate image file
+        if file_size == 0:
+            raise HTTPException(status_code=400, detail="Image file is empty")
+
+        # Save uploaded file temporarily
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
+            tmp_file.write(image_content)
+            tmp_path = tmp_file.name
+
+        try:
+            # Parse timestamp
+            captured_at_str = (
+                captured_at.replace("Z", "+00:00")
+                if captured_at.endswith("Z")
+                else captured_at
+            )
+            captured_at_obj = datetime.fromisoformat(captured_at_str)
+
+            hint_bool: Optional[bool] = None
+            if interesting_hint is not None:
+                lower_hint = interesting_hint.lower()
+                if lower_hint in {"true", "1", "yes", "on"}:
+                    hint_bool = True
+                elif lower_hint in {"false", "0", "no", "off"}:
+                    hint_bool = False
+
+            # Store frame in database (VideoStore will generate embedding and move file)
+            insert_result = await video_store.insert_frame(
+                channel_id=channel_id,
+                image_path=tmp_path,
+                captured_at=captured_at_obj,
+                is_interesting=hint_bool,
+            )
+            frame_id = insert_result["frame_id"]
+
+            if chat_store is not None and vector_store is not None:
+                capture_decision = await determine_capture_interval(
+                    channel_id=channel_id,
+                    captured_at=captured_at_obj,
+                    chat_store=chat_store,
+                    vector_store=vector_store,
+                    recent_chat_count=insert_result.get("chat_count"),
+                    transcript_text=insert_result.get("transcript_text"),
+                    was_interesting=insert_result.get("was_interesting", False),
+                )
+            else:
+                capture_decision = {
+                    "next_interval_seconds": 10,
+                    "recent_chat_count": insert_result.get("chat_count", 0),
+                    "keyword_trigger": False,
+                }
+
+            video_logger.info(
+                f"Stored video frame: frame_id={frame_id}, channel={channel_id}"
+            )
+
+            return {
+                "frame_id": frame_id,
+                "status": "success",
+                "description_source": insert_result.get("description_source"),
+                "reused_description": insert_result.get("reused_description", False),
+                "interesting_frame": insert_result.get("was_interesting", False),
+                "next_interval_seconds": capture_decision["next_interval_seconds"],
+                "activity": {
+                    "recent_chat_count": capture_decision["recent_chat_count"],
+                    "keyword_trigger": capture_decision["keyword_trigger"],
+                },
+            }
+
+        except Exception as e:
+            # Clean up temp file on error
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            raise
+
+    except ValueError as e:
+        # Invalid timestamp format
+        video_logger.error(f"Invalid timestamp format: {captured_at}")
+        raise HTTPException(
+            status_code=400, detail=f"Invalid timestamp format: {str(e)}"
+        )
+    except Exception as exc:
+        video_logger.exception(f"Failed to process video frame: {exc}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to process video frame: {str(exc)}"
         ) from exc
 
 
@@ -1095,6 +1494,39 @@ async def startup_event():
             stream_metadata_logger.info("Metadata polling started")
         except Exception as exc:
             stream_metadata_logger.error(f"Failed to start metadata polling: {exc}")
+
+    # Validate broadcaster ID lookup on startup
+    if settings.target_channel:
+        try:
+            test_id = await get_broadcaster_id_from_channel_name(
+                settings.target_channel
+            )
+            if test_id:
+                logger.info(
+                    f"Broadcaster ID lookup validated on startup for channel: {settings.target_channel} (ID: {test_id})"
+                )
+            else:
+                logger.warning(
+                    f"Broadcaster ID lookup returned None for channel: {settings.target_channel}. "
+                    "Service may have issues."
+                )
+        except Exception as exc:
+            logger.error(
+                f"CRITICAL: Broadcaster ID lookup validation failed on startup for channel {settings.target_channel}: {exc}. "
+                "Service may not function correctly."
+            )
+    else:
+        logger.warning(
+            "TARGET_CHANNEL not set in .env, skipping broadcaster ID lookup validation"
+        )
+
+    # Start background summarization job
+    if summarizer:
+        try:
+            summarizer.start_background_job()
+            logger.info("Background summarization job started")
+        except Exception as exc:
+            logger.warning("Failed to start background summarization job: %s", exc)
 
 
 @app.on_event("shutdown")

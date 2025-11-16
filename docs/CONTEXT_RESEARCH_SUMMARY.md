@@ -90,6 +90,22 @@ Combine the best elements from each approach:
 - **Effort**: Medium
 - **See**: `CONTEXT_LAYER_EXPANSION.md` section 1.5 for detailed approaches
 
+1.6. **Visual Description Generation** (High Priority) ⭐ **NEW MVP SOLUTION**
+
+- **Problem**: LLM cannot "see" what's in video frames (only sees file paths)
+- **Solution**: GPT-4o-mini Vision API generates high-detail visual descriptions
+- **Strategy**: Hybrid lazy/cached generation with adaptive 5-10s capture intervals
+- **Cost**: ~$0.50-$0.70 per 10-hour stream (with optimizations)
+- **Impact**: Enables visual Q&A, visual context understanding
+- **Effort**: Medium
+- **See**: `CONTEXT_LAYER_EXPANSION.md` section 1.6 for detailed implementation
+
+**Key Features**:
+- Adaptive capture intervals (5-10s based on activity)
+- Hybrid generation: cache hits (30%), immediate (20%), lazy (50%)
+- Temporal continuity: includes previous frame descriptions
+- Summarization integration: all lazy frames have descriptions before 2-min summaries
+
 2. **Chat Message Storage** (High Priority)
 
    - Store messages with embeddings
@@ -138,17 +154,20 @@ Live Data → KV Cache (Recent 2 min) → Memory Propagation → Vector Store
 
 ```
 Audio (10-20s) → Transcription → Embedding → KV Cache + Vector Store
-Video (2s)     → Frame Extract → Embedding → KV Cache + Vector Store
+Video (5-10s adaptive) → Frame Extract → CLIP Embedding → KV Cache + Vector Store
+                        ↓
+                   GPT-4o-mini Vision API → Visual Description → Store with Frame
 Chat           → Message      → Embedding → KV Cache + Vector Store
 Metadata       → Snapshot      → Embedding → Vector Store
 
 Every 2 Minutes:
-  Segment Data → Summarization → Memory Propagation → Vector Store
+  Pre-generate lazy frame descriptions → Summarization → Memory Propagation → Vector Store
               ↓
          Sticky Memory (if important)
 
 Query:
   Multi-Source Retrieval → Adaptive Selection → Context Compression → LLM
+  (Includes visual descriptions for video frames)
 ```
 
 ---
@@ -168,7 +187,9 @@ Query:
 ### Cost
 
 - **Current**: ~$0.01/hour (audio embeddings + LLM)
-- **Target**: ~$0.012/hour (with video + summarization)
+- **With Video Descriptions**: ~$0.103/hour (GPT-4o-mini Vision API)
+- **With Optimizations**: ~$0.05-$0.07/hour (hybrid lazy/cached generation)
+- **Target**: ~$0.05-$0.07/hour (with video descriptions + summarization)
 
 ---
 
@@ -177,7 +198,7 @@ Query:
 - **Latency**: < 5s total
 - **Accuracy**: > 80% relevant answers
 - **Memory Efficiency**: < 1GB per 10-hour stream
-- **Cost**: < $0.50 per 10-hour stream
+- **Cost**: < $1.00 per 10-hour stream (with video descriptions: ~$0.50-$0.70)
 - **Context Relevance**: > 90% retrieved chunks relevant
 - **Multimodal Fusion**: > 70% answers use multiple modalities
 
@@ -204,5 +225,11 @@ Query:
 
 ---
 
-**Document Version**: 1.0  
+**Document Version**: 2.0  
 **Last Updated**: 2025-01-30
+
+**Major Updates (v2.0)**:
+- Added Section 1.6: Visual Description Generation (MVP Solution)
+- Updated cost targets with GPT-4o-mini Vision API pricing
+- Updated data flow diagram to include visual description generation
+- Documented hybrid lazy/cached generation strategy
